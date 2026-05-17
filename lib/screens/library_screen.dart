@@ -15,6 +15,9 @@ import '../services/core_manager.dart';
 import '../services/theme_service.dart';
 import '../services/launch_service.dart';
 import '../widgets/theme_selector_dialog.dart';
+import '../services/updater_service.dart';
+import '../widgets/update_dialog.dart';
+import '../version.dart';
 
 class LibraryScreen extends StatefulWidget {
   const LibraryScreen({super.key});
@@ -42,6 +45,39 @@ class _LibraryScreenState extends State<LibraryScreen> {
   String _token = '';
   String _userId = '';
 
+  VantageUpdate? _pendingUpdate;
+
+  Future<void> _checkForUpdatesSilently() async {
+    try {
+      final update = await UpdaterService.instance.checkForUpdate();
+      if (update != null && mounted) {
+        setState(() {
+          _pendingUpdate = update;
+        });
+      }
+    } catch (e) {
+      print('VANTAGE_LIB: Silent update check failed: $e');
+    }
+  }
+
+  Future<void> _triggerManualUpdateCheck() async {
+    _snack('SYSTEM: CHECKING FOR SYSTEM UPDATES...');
+    try {
+      final update = await UpdaterService.instance.checkForUpdate();
+      if (!mounted) return;
+      if (update != null) {
+        setState(() {
+          _pendingUpdate = update;
+        });
+        UpdateDialog.show(context, update);
+      } else {
+        _snack('SYSTEM: YOU ARE ON THE LATEST VERSION ($appVersion)');
+      }
+    } catch (e) {
+      _snack('SYSTEM: UPDATE CHECK FAILED');
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -60,6 +96,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
     _token = await _prefs.token;
     _userId = await _prefs.userId;
     await _loadAllGames();
+    _checkForUpdatesSilently();
   }
 
   void _onScroll() {
@@ -227,6 +264,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                   if (val == 'cores') context.push('/cores');
                   if (val == 'inputs') context.push('/inputs');
                   if (val == 'purge') _purgeAllCache();
+                  if (val == 'update') _triggerManualUpdateCheck();
                   if (val == 'logout') _logout();
                 },
                 itemBuilder: (ctx) => [
@@ -234,6 +272,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                   const PopupMenuItem(value: 'cores', child: Text('CORE MGR')),
                   const PopupMenuItem(value: 'inputs', child: Text('INPUT MAP')),
                   const PopupMenuItem(value: 'purge', child: Text('PURGE CACHE', style: TextStyle(color: Colors.redAccent))),
+                  const PopupMenuItem(value: 'update', child: Text('CHECK FOR UPDATES')),
                   const PopupMenuItem(value: 'logout', child: Text('LOGOUT', style: TextStyle(color: Color(0xFFFF5C00)))),
                 ],
               ),
@@ -261,6 +300,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
                 onPressed: _purgeAllCache,
                 tooltip: 'PURGE ALL CACHE',
               ),
+              IconButton(
+                icon: const Icon(Icons.system_update_alt, size: 20, color: Colors.blueAccent),
+                onPressed: _triggerManualUpdateCheck,
+                tooltip: 'CHECK FOR UPDATES',
+              ),
               _ThemeToggleButton(),
               IconButton(
                 icon: const Icon(Icons.power_settings_new, size: 20, color: Color(0xFFFF5C00)),
@@ -279,6 +323,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
             bottom: true,
             child: Column(
               children: [
+                _buildUpdateBanner(),
                 _buildSystemFilterRow(),
                 Expanded(
                   child: _items.isEmpty && !_isLoading
@@ -359,6 +404,17 @@ class _LibraryScreenState extends State<LibraryScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildUpdateBanner() {
+    if (_pendingUpdate == null) return const SizedBox.shrink();
+
+    return _UpdateBannerCard(
+      update: _pendingUpdate!,
+      onTap: () {
+        UpdateDialog.show(context, _pendingUpdate!);
+      },
     );
   }
 }
@@ -653,6 +709,109 @@ class _TvFilterChipState extends State<_TvFilterChip> {
               fontWeight: FontWeight.w900,
               letterSpacing: 1.0,
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _UpdateBannerCard extends StatefulWidget {
+  final VantageUpdate update;
+  final VoidCallback onTap;
+
+  const _UpdateBannerCard({required this.update, required this.onTap});
+
+  @override
+  State<_UpdateBannerCard> createState() => _UpdateBannerCardState();
+}
+
+class _UpdateBannerCardState extends State<_UpdateBannerCard> {
+  bool _isFocused = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Focus(
+      onFocusChange: (f) => setState(() => _isFocused = f),
+      onKeyEvent: (node, event) {
+        if (event is KeyDownEvent && (
+          event.logicalKey == LogicalKeyboardKey.enter ||
+          event.logicalKey == LogicalKeyboardKey.select ||
+          event.logicalKey == LogicalKeyboardKey.gameButtonA
+        )) {
+          widget.onTap();
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
+      child: InkWell(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          margin: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                const Color(0xFFFF5C00).withOpacity(_isFocused ? 0.2 : 0.08),
+                Colors.white.withOpacity(0.02),
+              ],
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+            ),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: _isFocused ? const Color(0xFFFF5C00) : const Color(0xFFFF5C00).withOpacity(0.3),
+              width: _isFocused ? 2 : 1,
+            ),
+            boxShadow: [
+              if (_isFocused)
+                BoxShadow(
+                  color: const Color(0xFFFF5C00).withOpacity(0.2),
+                  blurRadius: 12,
+                  spreadRadius: 1,
+                ),
+            ],
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.system_update_alt, color: Color(0xFFFF5C00), size: 22),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'VANTAGE SYSTEM UPDATE AVAILABLE: VERSION ${widget.update.version}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 12,
+                        letterSpacing: 1.5,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'CLICK OR PRESS SELECT TO DOWNLOAD AND INSTALL THE LATEST SYSTEM VERSION.',
+                      style: TextStyle(
+                        color: Colors.white38,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 10,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 16),
+              const Icon(
+                Icons.arrow_forward_ios,
+                color: Color(0xFFFF5C00),
+                size: 14,
+              ),
+            ],
           ),
         ),
       ),
