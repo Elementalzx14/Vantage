@@ -1,4 +1,4 @@
-﻿
+
 
 
 
@@ -14,6 +14,9 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
+import 'package:flutter/rendering.dart';
 import 'dart:ui';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
@@ -22,6 +25,8 @@ import '../services/prefs.dart';
 import 'package:gamepads/gamepads.dart';
 import 'dart:async';
 import 'dart:convert';
+import '../services/core_manager.dart';
+import '../widgets/save_state_manager.dart';
 
 
 
@@ -64,19 +69,29 @@ class _EmulatorScreenState extends State<EmulatorScreen>
   int? _textureId;
   bool _showDock = false;
   bool _dockMinimized = true;
-  bool _showInputMapping = false;
   double _volume = 1.0;
   bool _fastForward = false;
   bool _slowMotion = false;
-  int? _bindingRetroId;
-  bool _bindingIsGamepad = false;
   double _coreAspectRatio = 4.0 / 3.0;
   ScalingMode _scalingMode = ScalingMode.fit;
+  bool _showSaveManagerPanel = false;
   final FocusNode _focusNode = FocusNode();
-  Offset _bubblePos = const Offset(32, 100);
+  final FocusNode _dockFocusNode = FocusNode();
+  final FocusScopeNode _saveManagerFocusScopeNode = FocusScopeNode();
+  Offset _bubblePos = const Offset(100, 100);
   final _api = JellyfinApi();
   StreamSubscription? _gamepadSub;
   final _prefs = Prefs();
+  int _selectedActionIndex = 0;
+  
+  List<String> get _dockActions {
+    return [
+      'pause', 'save', 'load', 'saves', 'reset', 'fastforward', 
+      if (!Platform.isAndroid) 'scaling',
+      if (!Platform.isAndroid) 'volume',
+      'minimize', 'exit'
+    ];
+  }
   
   static final Map<String, int> _defaultGamepadMap = Platform.isAndroid ? {
     
@@ -142,20 +157,6 @@ class _EmulatorScreenState extends State<EmulatorScreen>
   Map<String, int> _gamepadMap = Map.from(_defaultGamepadMap);
   Map<LogicalKeyboardKey, int> _keyMap = Map.from(_defaultKeyMap);
 
-  void _resetKeyboardMapping() {
-    setState(() {
-      _keyMap = Map.from(_defaultKeyMap);
-    });
-    _saveKeyMap();
-  }
-
-  void _resetGamepadMapping() {
-    setState(() {
-      _gamepadMap = Map.from(_defaultGamepadMap);
-    });
-    _saveGamepadMap();
-  }
-
   @override
   void initState() {
     super.initState();
@@ -164,6 +165,9 @@ class _EmulatorScreenState extends State<EmulatorScreen>
     _launch();
     _focusNode.requestFocus();
     _initGamepads();
+    
+    // Hide status bar and bottom navigation bar for a true console-like gameplay experience
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
   }
 
   Future<void> _loadInputMap() async {
@@ -202,57 +206,30 @@ class _EmulatorScreenState extends State<EmulatorScreen>
     }
   }
 
-  Future<void> _saveKeyMap() async {
-    final Map<String, int> mapToSave = {};
-    for (final entry in _keyMap.entries) {
-      mapToSave[entry.key.keyId.toString()] = entry.value;
-    }
-    await _prefs.setKeyMapJson(jsonEncode(mapToSave));
-  }
-
-  Future<void> _saveGamepadMap() async {
-    await _prefs.setGamepadMapJson(jsonEncode(_gamepadMap));
-  }
-
   void _initGamepads() {
     _gamepadSub = Gamepads.events.listen((event) {
       if (!mounted) return;
 
-      
-      if (_bindingRetroId != null) {
-        if (event.type == KeyType.button && event.value > 0) {
+      // Handle Quick Menu toggle via Select (6) or Start (7) buttons
+      // These are often buttons 6, 7 or similar on gamepads
+      if (event.type == KeyType.button && event.value > 0) {
+        if (event.key == '6' || event.key == '7' || event.key == 'buttonSelect' || event.key == 'buttonStart') {
           setState(() {
-            
-            _gamepadMap.removeWhere((k, v) => k == event.key);
-            
-            _gamepadMap.removeWhere((k, v) => v == _bindingRetroId);
-            
-            _gamepadMap[event.key] = _bindingRetroId!;
+            if (_showDock) {
+              _showDock = false;
+              _focusNode.requestFocus();
+            } else {
+              _showDock = true;
+              Future.delayed(const Duration(milliseconds: 50), () {
+                _dockFocusNode.requestFocus();
+              });
+            }
           });
-          _saveGamepadMap();
-          return;
-        } else if (event.type == KeyType.button && event.value == 0) {
-          
-          setState(() => _bindingRetroId = null);
-          return;
-        } else if (event.type == KeyType.analog && event.value.abs() > 0.5) {
-          setState(() {
-            
-            final keyWithPolarity = '${event.key}${event.value > 0 ? '+' : '-'}';
-            
-            
-            _gamepadMap.removeWhere((k, v) => k == keyWithPolarity);
-            _gamepadMap.removeWhere((k, v) => v == _bindingRetroId);
-
-            _gamepadMap[keyWithPolarity] = _bindingRetroId!;
-            
-            _gamepadMap[event.key] = _bindingRetroId!;
-            _bindingRetroId = null;
-          });
-          _saveGamepadMap();
           return;
         }
       }
+
+
 
       
       
@@ -324,7 +301,11 @@ class _EmulatorScreenState extends State<EmulatorScreen>
     _channel.invokeMethod('resetMappingMode');
     _channel.invokeMethod('stop');
     _focusNode.dispose();
+    _dockFocusNode.dispose();
+    _saveManagerFocusScopeNode.dispose();
     _gamepadSub?.cancel();
+    // Restore standard edge-to-edge system UI overlay styles upon exiting gameplay
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     super.dispose();
   }
 
@@ -366,6 +347,7 @@ class _EmulatorScreenState extends State<EmulatorScreen>
       final dynamic result = await _channel.invokeMethod('launch', {
         'romPath': widget.romPath,
         'corePath': widget.corePath,
+        'systemPath': CoreManager.instance.systemDir,
       });
       if (mounted) {
         if (result is int) {
@@ -382,14 +364,27 @@ class _EmulatorScreenState extends State<EmulatorScreen>
 
       
       if (widget.itemId != null) {
-        _cloudLoad(silent: true);
+        Future.delayed(const Duration(milliseconds: 1500), () {
+          if (mounted) _cloudLoad(silent: true);
+        });
       }
     } on PlatformException catch (e) {
+      debugPrint('EMULATOR ERROR: ${e.code} | ${e.message} | ${e.details}');
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Emulator error: ${e.message}')));
-        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Emulator error: ${e.message ?? e.code}'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+        // Don't pop immediately if it's a specific error we want to see
+        Future.delayed(const Duration(seconds: 2), () {
+          if (mounted) Navigator.pop(context);
+        });
       }
+    } catch (e) {
+      debugPrint('GENERAL ERROR DURING LAUNCH: $e');
+      if (mounted) Navigator.pop(context);
     }
   }
 
@@ -411,8 +406,7 @@ class _EmulatorScreenState extends State<EmulatorScreen>
       'Resume',
       'Save State',
       'Load State',
-      if (hasCloud) 'Cloud Save',
-      if (hasCloud) 'Cloud Load',
+      if (hasCloud) 'Save Manager',
       'Reset',
       'Exit',
     ];
@@ -456,11 +450,8 @@ class _EmulatorScreenState extends State<EmulatorScreen>
       case 'Load State':
         await _localLoad();
         _resume();
-      case 'Cloud Save':
-        await _cloudSave();
-        _resume();
-      case 'Cloud Load':
-        await _cloudLoad();
+      case 'Save Manager':
+        await _showSaveManager();
         _resume();
       case 'Reset':
         await _channel.invokeMethod('reset');
@@ -536,47 +527,57 @@ class _EmulatorScreenState extends State<EmulatorScreen>
     _channel.invokeMethod('setFastForward', _fastForward);
   }
 
-  Future<void> _cloudSave() async {
-    final id = widget.itemId;
-    if (id == null) return;
-    try {
-      final data = await _channel.invokeMethod<Uint8List>('serializeState');
-      if (data == null) return;
-
-      await _api.uploadSave(
-        widget.serverUrl,
-        widget.token,
-        widget.userId,
-        id,
-        data,
-      );
-
-      _snack('CLOUD: UPLINK_SUCCESS');
-    } catch (e) {
-      _snack('CLOUD: UPLINK_FAILURE [\$e]');
-    }
+  Future<void> _showSaveManager() async {
+    if (widget.itemId == null) return;
+    
+    await showDialog(
+      context: context,
+      builder: (_) => SaveStateManager(
+        itemId: widget.itemId!,
+        title: widget.title,
+        serverUrl: widget.serverUrl,
+        token: widget.token,
+        userId: widget.userId,
+        onGetLocalState: () async {
+          return await _channel.invokeMethod<Uint8List>('saveState');
+        },
+        onApplyLocalState: (data) async {
+          await _channel.invokeMethod('loadState', {'state': data});
+        },
+      ),
+    );
   }
 
-  Future<void> _cloudLoad({bool silent = false}) async {
-    final id = widget.itemId;
-    if (id == null) return;
-    try {
-      final data = await _api.downloadSave(
-        widget.serverUrl,
-        widget.token,
-        widget.userId,
-        id,
-      );
+  void _triggerDockAction(String action) {
+    switch (action) {
+      case 'pause':
+        if (_paused) _resume(); else _pause();
+        setState(() {});
+        break;
+      case 'save':
+        _localSave();
+        break;
+      case 'load':
+        _localLoad();
+        break;
+      case 'saves':
+        setState(() => _showSaveManagerPanel = !_showSaveManagerPanel);
+        break;
+      case 'scaling':
+        setState(() {
+          _scalingMode = ScalingMode.values[(_scalingMode.index + 1) % ScalingMode.values.length];
+        });
+        break;
 
-      if (data == null) {
-        if (!silent) _snack('CLOUD: NO_RECORD_FOUND');
-        return;
-      }
-      
-      await _channel.invokeMethod('unserializeState', {'data': data});
-      _snack('CLOUD: DOWNLINK_SUCCESS');
-    } catch (e) {
-      if (!silent) _snack('CLOUD: DOWNLINK_FAILURE [\$e]');
+      case 'fastforward':
+        _toggleFastForward();
+        break;
+      case 'minimize':
+        setState(() => _showDock = false);
+        break;
+      case 'exit':
+        Navigator.pop(context);
+        break;
     }
   }
 
@@ -622,6 +623,60 @@ class _EmulatorScreenState extends State<EmulatorScreen>
     }
   }
 
+  Future<void> _cloudLoad({bool silent = false}) async {
+    if (widget.itemId == null) return;
+    try {
+      final cloudTime = await _api.getSaveMetadata(
+        widget.serverUrl,
+        widget.token,
+        widget.userId,
+        widget.itemId!,
+        slot: 1,
+      );
+
+      if (cloudTime == null) {
+        if (!silent) _snack('No cloud save found');
+        return;
+      }
+
+      final directory = await getApplicationDocumentsDirectory();
+      final file = File('${directory.path}/Vantage/States/${widget.itemId}.state');
+      DateTime? localTime;
+      if (await file.exists()) {
+        localTime = await file.lastModified();
+      }
+
+      if (silent && localTime != null && cloudTime.isBefore(localTime)) {
+        return;
+      }
+
+      final data = await _api.downloadSave(
+        widget.serverUrl,
+        widget.token,
+        widget.userId,
+        widget.itemId!,
+        slot: 1,
+      );
+
+      if (data != null) {
+        final bool? success = await _channel.invokeMethod<bool>('loadState', {'state': data});
+        if (success == true) {
+          if (!silent) _snack('Cloud state loaded');
+          if (!await file.parent.exists()) await file.parent.create(recursive: true);
+          await file.writeAsBytes(data);
+          
+          try {
+            await file.setLastModified(cloudTime);
+          } catch (e) {
+            debugPrint('Failed to set last modified in _cloudLoad: $e');
+          }
+        }
+      }
+    } catch (e) {
+      if (!silent) _snack('Cloud load error: $e');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     
@@ -630,59 +685,84 @@ class _EmulatorScreenState extends State<EmulatorScreen>
         MediaQuery.of(context).size.aspectRatio < 1 &&
             MediaQuery.of(context).size.shortestSide < 600;
 
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        
+        // If any overlay is open, close it and DON'T re-open anything
+        if (_showSaveManagerPanel) {
+          setState(() => _showSaveManagerPanel = false);
+          return;
+        }
+
+        if (_showDock) {
+          setState(() {
+            _showDock = false;
+            _focusNode.requestFocus();
+          });
+        } else {
+          setState(() {
+            _showDock = true;
+            _selectedActionIndex = 0; // Reset to first item
+            Future.delayed(const Duration(milliseconds: 50), () {
+              _dockFocusNode.requestFocus();
+            });
+          });
+        }
+      },
+      child: Scaffold(
       backgroundColor: Colors.black,
       body: Focus(
         focusNode: _focusNode,
         onKeyEvent: (node, event) {
+          if (_showSaveManagerPanel) {
+            return KeyEventResult.ignored;
+          }
+
+          if (_showDock) {
+            if (event is KeyDownEvent) {
+              if (event.logicalKey == LogicalKeyboardKey.escape || event.logicalKey == LogicalKeyboardKey.goBack) {
+                setState(() => _showDock = false);
+                return KeyEventResult.handled;
+              }
+              
+              if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+                setState(() => _selectedActionIndex = (_selectedActionIndex - 1).clamp(0, _dockActions.length - 1));
+                return KeyEventResult.handled;
+              }
+              if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+                setState(() => _selectedActionIndex = (_selectedActionIndex + 1).clamp(0, _dockActions.length - 1));
+                return KeyEventResult.handled;
+              }
+              
+              // Handle Volume Adjustment when volume is selected
+              if (_dockActions[_selectedActionIndex] == 'volume') {
+                if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+                  _setVolume((_volume + 0.05).clamp(0.0, 1.0));
+                  return KeyEventResult.handled;
+                }
+                if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+                  _setVolume((_volume - 0.05).clamp(0.0, 1.0));
+                  return KeyEventResult.handled;
+                }
+              }
+
+              if (event.logicalKey == LogicalKeyboardKey.select || event.logicalKey == LogicalKeyboardKey.enter || event.logicalKey == LogicalKeyboardKey.gameButtonA) {
+                _triggerDockAction(_dockActions[_selectedActionIndex]);
+                return KeyEventResult.handled;
+              }
+            }
+            return KeyEventResult.handled; // Consume all when dock is open
+          }
+
           if (event is KeyDownEvent) {
             debugPrint('DEBUG: KeyDown: ${event.logicalKey.debugName} | Label: ${event.logicalKey.keyLabel} | ID: ${event.logicalKey.keyId}');
           }
           
           
-          if (_bindingRetroId != null) {
-            final keyLabel = event.logicalKey.keyLabel.toLowerCase();
-            if (keyLabel.contains('volume') || keyLabel.contains('power') || keyLabel.contains('home')) {
-              return KeyEventResult.ignored;
-            }
 
-            if (event is KeyDownEvent) {
-              setState(() {
-                _keyMap.removeWhere((k, v) => k == event.logicalKey);
-                _keyMap.removeWhere((k, v) => v == _bindingRetroId);
-                
-                _keyMap[event.logicalKey] = _bindingRetroId!;
-              });
-              _saveKeyMap();
-            } else if (event is KeyUpEvent) {
-              
-              setState(() => _bindingRetroId = null);
-            }
-            return KeyEventResult.handled; 
-          }
 
-          
-          if (event.logicalKey == LogicalKeyboardKey.escape || event.logicalKey == LogicalKeyboardKey.goBack) {
-            if (event is KeyDownEvent) {
-              setState(() {
-                _showDock = !_showDock;
-                if (!_showDock) _focusNode.requestFocus();
-              });
-            }
-            return KeyEventResult.handled;
-          }
-
-          
-          if (_showDock) {
-            final label = event.logicalKey.keyLabel.toLowerCase();
-            if (label.contains('arrow') || label.contains('dpad') || 
-                event.logicalKey == LogicalKeyboardKey.enter || 
-                event.logicalKey == LogicalKeyboardKey.select ||
-                event.logicalKey == LogicalKeyboardKey.gameButtonA ||
-                event.logicalKey == LogicalKeyboardKey.gameButtonB) {
-              return KeyEventResult.ignored; 
-            }
-          }
 
           final libretroId = _keyMap[event.logicalKey];
           if (libretroId != null) {
@@ -728,6 +808,9 @@ class _EmulatorScreenState extends State<EmulatorScreen>
             
             Positioned.fill(
               child: _EmulatorSurface(
+                romPath: widget.romPath,
+                corePath: widget.corePath,
+                systemPath: CoreManager.instance.systemDir,
                 textureId: _textureId,
                 scalingMode: _scalingMode,
                 coreAspectRatio: _coreAspectRatio,
@@ -746,98 +829,132 @@ class _EmulatorScreenState extends State<EmulatorScreen>
               ),
 
             
-            AnimatedPositioned(
-              duration: const Duration(milliseconds: 300),
-              curve: Curves.easeInOut,
-              bottom: _dockMinimized ? -50 : (isNarrowPortrait ? 48 : 24),
-              left: 0,
-              right: 0,
-              child: Align(
-                alignment: Alignment.bottomCenter,
-                child: _PremiumDock(
-                  onReset: () => _channel.invokeMethod('reset'),
-                  onExit: () => Navigator.pop(context),
-                  onSave: _localSave,
-                  onLoad: _localLoad,
-                  onTogglePause: () {
-                    if (_paused) _resume(); else _pause();
-                    setState(() {});
-                  },
-                  isPaused: _paused,
-                  onMinimize: () => setState(() => _dockMinimized = true),
-                  onOpenSettings: () {
-                    setState(() => _showInputMapping = true);
-                    _channel.invokeMethod('setMappingMode', {'mode': true});
-                  },
-                  volume: _volume,
-                  onVolumeChanged: _setVolume,
-                  isFastForward: _fastForward,
-                  onToggleFastForward: _toggleFastForward,
-                  isSlowMotion: _slowMotion,
-                  onToggleSlowMotion: _toggleSlowMotion,
-                  scalingMode: _scalingMode,
-                  onCycleScaling: () {
-                    setState(() {
-                      _scalingMode = ScalingMode.values[(_scalingMode.index + 1) % ScalingMode.values.length];
-                    });
-                  },
+            if (_showDock)
+              Positioned.fill(
+                child: RepaintBoundary(
+                  child: FocusScope(
+                    node: FocusScopeNode(),
+                    child: Stack(
+                      children: [
+                        // Backdrop Dim/Blur (Conditional for performance)
+                        Positioned.fill(
+                          child: GestureDetector(
+                            onTap: () => setState(() => _showDock = false),
+                            child: Platform.isAndroid 
+                              ? Container(
+                                  decoration: BoxDecoration(
+                                    gradient: LinearGradient(
+                                      begin: Alignment.topCenter,
+                                      end: Alignment.bottomCenter,
+                                      colors: [
+                                        Colors.black.withOpacity(0.2),
+                                        Colors.black.withOpacity(0.8),
+                                      ],
+                                    ),
+                                  ),
+                                )
+                              : BackdropFilter(
+                                  filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
+                                  child: Container(color: Colors.black.withOpacity(0.4)),
+                                ),
+                          ),
+                        ),
+                      // The Dock itself
+                      Positioned(
+                        bottom: (isNarrowPortrait ? 40 : 20) + MediaQuery.of(context).padding.bottom,
+                        left: 0,
+                        right: 0,
+                        child: Center(
+                          child: Focus(
+                            focusNode: _dockFocusNode,
+                            child: _PremiumDock(
+                              selectedIndex: _selectedActionIndex,
+                              onReset: () async {
+                                await _channel.invokeMethod('reset');
+                                setState(() => _showDock = false);
+                              },
+                              onExit: () => Navigator.pop(context),
+                              onSave: _localSave,
+                              onLoad: _localLoad,
+                              onTogglePause: () {
+                                if (_paused) _resume(); else _pause();
+                                setState(() {});
+                              },
+                              isPaused: _paused,
+                              onMinimize: () => setState(() => _showDock = false),
+                              volume: _volume,
+                               onVolumeChanged: _setVolume,
+                               isFastForward: _fastForward,
+                               onToggleFastForward: _toggleFastForward,
+                               isSlowMotion: _slowMotion,
+                               onToggleSlowMotion: _toggleSlowMotion,
+                               scalingMode: _scalingMode,
+                               onCycleScaling: () {
+                                 setState(() {
+                                   _scalingMode = ScalingMode.values[(_scalingMode.index + 1) % ScalingMode.values.length];
+                                 });
+                               },
+                               onOpenSaveManager: () {
+                                 setState(() {
+                                   _showSaveManagerPanel = true;
+                                   _showDock = false;
+                                 });
+                                 Future.delayed(const Duration(milliseconds: 50), () {
+                                   _saveManagerFocusScopeNode.requestFocus();
+                                 });
+                               },
+                               showSaveManagerPanel: _showSaveManagerPanel,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
 
             
-            if (_dockMinimized)
-              Platform.isAndroid 
-                ? Positioned(
-                    left: _bubblePos.dx,
-                    top: _bubblePos.dy,
-                    child: GestureDetector(
-                      onPanUpdate: (details) {
-                        setState(() {
-                          _bubblePos += details.delta;
-                          
-                          final size = MediaQuery.of(context).size;
-                          _bubblePos = Offset(
-                            _bubblePos.dx.clamp(16, size.width - 76),
-                            _bubblePos.dy.clamp(16, size.height - 76),
-                          );
-                        });
-                      },
-                      onTap: () => setState(() => _dockMinimized = false),
-                      child: Container(
-                        width: 60, height: 60,
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.1),
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white.withOpacity(0.2)),
-                          boxShadow: [
-                            BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 10)
-                          ],
-                        ),
-                        child: ClipOval(
-                          child: BackdropFilter(
-                            filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-                            child: const Center(
-                              child: Icon(Icons.rocket_launch, color: Color(0xFFFF5C00), size: 28),
-                            ),
-                          ),
-                        ),
-                      ),
+            if (_showSaveManagerPanel && widget.itemId != null)
+              Positioned(
+                bottom: (isNarrowPortrait ? 120 : 100) + MediaQuery.of(context).padding.bottom,
+                left: 0,
+                right: 0,
+                child: Center(
+                  child: Container(
+                    width: 340,
+                    decoration: BoxDecoration(
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.5),
+                          blurRadius: 20,
+                          spreadRadius: 5,
+                        )
+                      ],
                     ),
-                  )
-                : Positioned(
-                    bottom: 8,
-                    left: 0,
-                    right: 0,
-                    child: Center(
-                  child: GestureDetector(
-                    onTap: () => setState(() => _dockMinimized = false),
-                    child: Container(
-                      width: 40,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.3),
-                        borderRadius: BorderRadius.circular(2),
+                    child: FocusScope(
+                      node: _saveManagerFocusScopeNode,
+                      child: SaveStateManager(
+                        itemId: widget.itemId!,
+                        title: widget.title,
+                        serverUrl: widget.serverUrl,
+                        token: widget.token,
+                        userId: widget.userId,
+                        onGetLocalState: () async {
+                          return await _channel.invokeMethod<Uint8List>('saveState');
+                        },
+                        onApplyLocalState: (data) async {
+                          await _channel.invokeMethod('loadState', {'state': data});
+                        },
+                        onClose: () {
+                          setState(() {
+                            _showSaveManagerPanel = false;
+                            _showDock = true;
+                          });
+                          Future.delayed(const Duration(milliseconds: 50), () {
+                            _dockFocusNode.requestFocus();
+                          });
+                        },
                       ),
                     ),
                   ),
@@ -845,296 +962,18 @@ class _EmulatorScreenState extends State<EmulatorScreen>
               ),
 
             
-            if (_showInputMapping)
-              _InputMappingOverlay(
-                onClose: () {
-                  setState(() => _showInputMapping = false);
-                  _channel.invokeMethod('setMappingMode', {'mode': false});
-                },
-                keyMap: _keyMap,
-                gamepadMap: _gamepadMap,
-                bindingRetroId: _bindingRetroId,
-                onStartBind: (id, isGamepad) => setState(() {
-                  _bindingRetroId = id;
-                  _bindingIsGamepad = isGamepad;
-                }),
-                onResetKeyboard: _resetKeyboardMapping,
-                onResetGamepad: _resetGamepadMapping,
-              ),
+
+            
+
           ],
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 }
 
-class _InputMappingOverlay extends StatelessWidget {
-  final VoidCallback onClose;
-  final Map<LogicalKeyboardKey, int> keyMap;
-  final Map<String, int> gamepadMap;
-  final int? bindingRetroId;
-  final Function(int, bool) onStartBind;
-  final VoidCallback onResetKeyboard;
-  final VoidCallback onResetGamepad;
 
-  const _InputMappingOverlay({
-    required this.onClose, 
-    required this.keyMap,
-    required this.gamepadMap,
-    required this.bindingRetroId,
-    required this.onStartBind,
-    required this.onResetKeyboard,
-    required this.onResetGamepad,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final size = MediaQuery.of(context).size;
-    final isSmall = size.width < 600;
-
-    return BackdropFilter(
-      filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
-      child: Container(
-        color: Colors.black54,
-        child: Center(
-          child: Container(
-            width: isSmall ? size.width * 0.9 : 650,
-            constraints: BoxConstraints(maxHeight: size.height * 0.8),
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-              color: const Color(0xFF16213E),
-              borderRadius: BorderRadius.circular(24),
-              border: Border.all(color: Colors.white.withOpacity(0.1)),
-            ),
-            child: DefaultTabController(
-              length: Platform.isAndroid ? 1 : 2,
-              child: Material(
-                color: Colors.transparent,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text("Input Mapping", style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
-                        IconButton(icon: const Icon(Icons.close, color: Colors.white54), onPressed: onClose),
-                      ],
-                    ),
-                    if (!Platform.isAndroid)
-                      const TabBar(
-                        tabs: [
-                          Tab(text: "Keyboard"),
-                          Tab(text: "Gamepad"),
-                        ],
-                        labelColor: Colors.white,
-                        unselectedLabelColor: Colors.white54,
-                        indicatorColor: Color(0xFF6C63FF),
-                      ),
-                    const SizedBox(height: 16),
-                    const Text("Click a button then press a key to bind it", style: TextStyle(color: Colors.white70, fontSize: 12)),
-                    const SizedBox(height: 16),
-                    Flexible(
-                      child: Platform.isAndroid
-                          ? SingleChildScrollView(
-                              child: Wrap(
-                                spacing: 8,
-                                runSpacing: 8,
-                                children: _buildBindingButtons(true),
-                              ),
-                            )
-                          : TabBarView(
-                              children: [
-                                
-                                SingleChildScrollView(
-                                  child: Wrap(
-                                    spacing: 8,
-                                    runSpacing: 8,
-                                    children: _buildBindingButtons(false),
-                                  ),
-                                ),
-                                
-                                SingleChildScrollView(
-                                  child: Wrap(
-                                    spacing: 8,
-                                    runSpacing: 8,
-                                    children: _buildBindingButtons(true),
-                                  ),
-                                ),
-                              ],
-                            ),
-                    ),
-                    const SizedBox(height: 16),
-                    ElevatedButton(
-                      onPressed: onClose,
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.white10),
-                      child: const Text("Done"),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  List<Widget> _buildBindingButtons(bool isGamepad) {
-    return [
-      _BindBtn(label: "UP", retroId: 4, currentKey: _getKeyName(4, isGamepad), isBinding: bindingRetroId == 4, onBind: () => onStartBind(4, isGamepad)),
-      _BindBtn(label: "DOWN", retroId: 5, currentKey: _getKeyName(5, isGamepad), isBinding: bindingRetroId == 5, onBind: () => onStartBind(5, isGamepad)),
-      _BindBtn(label: "LEFT", retroId: 6, currentKey: _getKeyName(6, isGamepad), isBinding: bindingRetroId == 6, onBind: () => onStartBind(6, isGamepad)),
-      _BindBtn(label: "RIGHT", retroId: 7, currentKey: _getKeyName(7, isGamepad), isBinding: bindingRetroId == 7, onBind: () => onStartBind(7, isGamepad)),
-      const Divider(color: Colors.white12),
-      _BindBtn(label: "A", retroId: 8, currentKey: _getKeyName(8, isGamepad), isBinding: bindingRetroId == 8, onBind: () => onStartBind(8, isGamepad)),
-      _BindBtn(label: "B", retroId: 0, currentKey: _getKeyName(0, isGamepad), isBinding: bindingRetroId == 0, onBind: () => onStartBind(0, isGamepad)),
-      _BindBtn(label: "X", retroId: 9, currentKey: _getKeyName(9, isGamepad), isBinding: bindingRetroId == 9, onBind: () => onStartBind(9, isGamepad)),
-      _BindBtn(label: "Y", retroId: 1, currentKey: _getKeyName(1, isGamepad), isBinding: bindingRetroId == 1, onBind: () => onStartBind(1, isGamepad)),
-      const Divider(color: Colors.white12),
-      _BindBtn(label: "START", retroId: 3, currentKey: _getKeyName(3, isGamepad), isBinding: bindingRetroId == 3, onBind: () => onStartBind(3, isGamepad)),
-      _BindBtn(label: "SELECT", retroId: 2, currentKey: _getKeyName(2, isGamepad), isBinding: bindingRetroId == 2, onBind: () => onStartBind(2, isGamepad)),
-      const Divider(color: Colors.white12),
-      _BindBtn(label: "L", retroId: 10, currentKey: _getKeyName(10, isGamepad), isBinding: bindingRetroId == 10, onBind: () => onStartBind(10, isGamepad)),
-      _BindBtn(label: "R", retroId: 11, currentKey: _getKeyName(11, isGamepad), isBinding: bindingRetroId == 11, onBind: () => onStartBind(11, isGamepad)),
-      _BindBtn(label: "L2", retroId: 12, currentKey: _getKeyName(12, isGamepad), isBinding: bindingRetroId == 12, onBind: () => onStartBind(12, isGamepad)),
-      _BindBtn(label: "R2", retroId: 13, currentKey: _getKeyName(13, isGamepad), isBinding: bindingRetroId == 13, onBind: () => onStartBind(13, isGamepad)),
-      _BindBtn(label: "L3", retroId: 14, currentKey: _getKeyName(14, isGamepad), isBinding: bindingRetroId == 14, onBind: () => onStartBind(14, isGamepad)),
-      _BindBtn(label: "R3", retroId: 15, currentKey: _getKeyName(15, isGamepad), isBinding: bindingRetroId == 15, onBind: () => onStartBind(15, isGamepad)),
-      const Divider(color: Colors.white12),
-      const Text("Left Analog", style: TextStyle(color: Colors.white38, fontSize: 10)),
-      const SizedBox(width: double.infinity),
-      _BindBtn(label: "LX-", retroId: 100, currentKey: _getKeyName(100, isGamepad), isBinding: bindingRetroId == 100, onBind: () => onStartBind(100, isGamepad)),
-      _BindBtn(label: "LX+", retroId: 101, currentKey: _getKeyName(101, isGamepad), isBinding: bindingRetroId == 101, onBind: () => onStartBind(101, isGamepad)),
-      _BindBtn(label: "LY-", retroId: 102, currentKey: _getKeyName(102, isGamepad), isBinding: bindingRetroId == 102, onBind: () => onStartBind(102, isGamepad)),
-      _BindBtn(label: "LY+", retroId: 103, currentKey: _getKeyName(103, isGamepad), isBinding: bindingRetroId == 103, onBind: () => onStartBind(103, isGamepad)),
-      const Divider(color: Colors.white12),
-      const Text("Right Analog", style: TextStyle(color: Colors.white38, fontSize: 10)),
-      const SizedBox(width: double.infinity),
-      _BindBtn(label: "RX-", retroId: 104, currentKey: _getKeyName(104, isGamepad), isBinding: bindingRetroId == 104, onBind: () => onStartBind(104, isGamepad)),
-      _BindBtn(label: "RX+", retroId: 105, currentKey: _getKeyName(105, isGamepad), isBinding: bindingRetroId == 105, onBind: () => onStartBind(105, isGamepad)),
-      _BindBtn(label: "RY-", retroId: 106, currentKey: _getKeyName(106, isGamepad), isBinding: bindingRetroId == 106, onBind: () => onStartBind(106, isGamepad)),
-      _BindBtn(label: "RY+", retroId: 107, currentKey: _getKeyName(107, isGamepad), isBinding: bindingRetroId == 107, onBind: () => onStartBind(107, isGamepad)),
-      const Divider(color: Colors.white12),
-      const SizedBox(height: 8),
-      Center(
-        child: TextButton.icon(
-          onPressed: isGamepad ? onResetGamepad : onResetKeyboard,
-          icon: const Icon(Icons.restore, size: 18, color: Colors.redAccent),
-          label: const Text("Reset to Defaults", style: TextStyle(color: Colors.redAccent)),
-          style: TextButton.styleFrom(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-            backgroundColor: Colors.white.withOpacity(0.05),
-          ),
-        ),
-      ),
-      const SizedBox(height: 16),
-    ];
-  }
-
-  String _getKeyName(int retroId, bool isGamepad) {
-    final names = <String>[];
-    
-    if (isGamepad) {
-      
-      for (final entry in gamepadMap.entries) {
-        if (entry.value == retroId) {
-          names.add(entry.key);
-        }
-      }
-      
-      
-      
-      final toRemove = <String>[];
-      for (final name in names) {
-        if (name.endsWith('+') || name.endsWith('-')) {
-          final base = name.substring(0, name.length - 1);
-          if (names.contains(base)) {
-            toRemove.add(base);
-          }
-        }
-      }
-      names.removeWhere((n) => toRemove.contains(n));
-      
-      
-      
-      if (Platform.isAndroid) {
-        for (final entry in keyMap.entries) {
-          if (entry.value == retroId) {
-            var label = entry.key.keyLabel;
-            if (label.isEmpty) {
-              label = entry.key.debugName ?? "Unknown";
-              if (label.contains('#')) {
-                label = label.split('#').last;
-              }
-            }
-            if (!names.contains(label)) {
-              names.add(label);
-            }
-          }
-        }
-      }
-    } else {
-      
-      for (final entry in keyMap.entries) {
-        if (entry.value == retroId) {
-          var label = entry.key.keyLabel;
-          if (label.isEmpty) {
-            label = entry.key.debugName ?? "Unknown";
-            if (label.contains('#')) {
-              label = label.split('#').last;
-            }
-          }
-          if (!label.toLowerCase().contains('game button')) {
-            names.add(label);
-          }
-        }
-      }
-    }
-    
-    
-    return names.isEmpty ? "None" : names.first;
-  }
-}
-
-class _BindBtn extends StatelessWidget {
-  final String label;
-  final int retroId;
-  final String currentKey;
-  final bool isBinding;
-  final VoidCallback onBind;
-
-  const _BindBtn({
-    required this.label,
-    required this.retroId,
-    required this.currentKey,
-    required this.isBinding,
-    required this.onBind,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onBind,
-      child: Container(
-        width: 80,
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        decoration: BoxDecoration(
-          color: isBinding ? Colors.blue.withOpacity(0.3) : Colors.white.withOpacity(0.05),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: isBinding ? Colors.blue : Colors.white12),
-        ),
-        child: Column(
-          children: [
-            Text(label, style: const TextStyle(color: Colors.white54, fontSize: 10)),
-            const SizedBox(height: 4),
-            Text(isBinding ? "???" : currentKey, 
-              style: TextStyle(color: isBinding ? Colors.blue : Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 class _PremiumDock extends StatelessWidget {
   final VoidCallback onReset;
@@ -1143,7 +982,6 @@ class _PremiumDock extends StatelessWidget {
   final VoidCallback onLoad;
   final VoidCallback onTogglePause;
   final VoidCallback onMinimize;
-  final VoidCallback onOpenSettings;
   final double volume;
   final Function(double) onVolumeChanged;
   final bool isFastForward;
@@ -1153,15 +991,19 @@ class _PremiumDock extends StatelessWidget {
   final bool isPaused;
   final ScalingMode scalingMode;
   final VoidCallback onCycleScaling;
+  final VoidCallback onOpenSaveManager;
+  final bool showSaveManagerPanel;
+
+  final int selectedIndex;
 
   const _PremiumDock({
+    required this.selectedIndex,
     required this.onReset,
     required this.onExit,
     required this.onSave,
     required this.onLoad,
     required this.onTogglePause,
     required this.onMinimize,
-    required this.onOpenSettings,
     required this.volume,
     required this.onVolumeChanged,
     required this.isFastForward,
@@ -1171,84 +1013,122 @@ class _PremiumDock extends StatelessWidget {
     required this.isPaused,
     required this.scalingMode,
     required this.onCycleScaling,
+    required this.onOpenSaveManager,
+    required this.showSaveManagerPanel,
   });
 
   @override
   Widget build(BuildContext context) {
     final isSmall = MediaQuery.of(context).size.width < 800;
 
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(24),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-        child: Container(
-          height: isSmall ? 56 : 64,
-          constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width - 32),
-          padding: const EdgeInsets.symmetric(horizontal: 8),
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: Colors.white.withOpacity(0.2)),
+    return RepaintBoundary(
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(24),
+        child: Platform.isAndroid
+            ? Container(
+                height: isSmall ? 56 : 64,
+                constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width - 32),
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1A1A1A).withOpacity(0.95),
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(color: Colors.white.withOpacity(0.1)),
+                ),
+                child: _buildDockContent(isSmall),
+              )
+            : BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                child: Container(
+                  height: isSmall ? 56 : 64,
+                  constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width - 32),
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(color: Colors.white.withOpacity(0.2)),
+                  ),
+                  child: _buildDockContent(isSmall),
+                ),
+              ),
+      ),
+    );
+  }
+
+  Widget _buildDockContent(bool isSmall) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _DockButton(icon: isPaused ? Icons.play_arrow : Icons.pause, onPressed: onTogglePause, isSelected: selectedIndex == 0),
+          const _VerticalDivider(),
+          _DockButton(icon: Icons.save, onPressed: onSave, isSelected: selectedIndex == 1),
+          _DockButton(icon: Icons.upload_file, onPressed: onLoad, isSelected: selectedIndex == 2),
+          _DockButton(
+            icon: Icons.cloud_sync, 
+            onPressed: onOpenSaveManager,
+            color: showSaveManagerPanel ? const Color(0xFFFF5C00) : Colors.white70,
+            isSelected: selectedIndex == 3,
           ),
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _DockButton(icon: isPaused ? Icons.play_arrow : Icons.pause, onPressed: onTogglePause),
-                const _VerticalDivider(),
-                _DockButton(icon: Icons.save, onPressed: onSave),
-                _DockButton(icon: Icons.upload_file, onPressed: onLoad),
-                const _VerticalDivider(),
-                _DockButton(icon: Icons.refresh, onPressed: onReset),
-                _DockButton(icon: Icons.settings, onPressed: onOpenSettings),
-                const _VerticalDivider(),
-                _DockButton(
-                  icon: Icons.bolt, 
-                  onPressed: onToggleFastForward, 
-                  color: isFastForward ? Colors.yellowAccent : Colors.white70
-                ),
-                if (!Platform.isAndroid)
-                  _DockButton(
-                    icon: Icons.slow_motion_video, 
-                    onPressed: onToggleSlowMotion, 
-                    color: isSlowMotion ? Colors.cyanAccent : Colors.white70
-                  ),
-                const _VerticalDivider(),
-                if (!Platform.isAndroid) ...[
-                  _DockButton(
-                    icon: scalingMode == ScalingMode.stretch ? Icons.aspect_ratio : (scalingMode == ScalingMode.fit ? Icons.fit_screen : Icons.zoom_in),
-                    onPressed: onCycleScaling,
-                    color: Colors.white70,
-                  ),
-                  const _VerticalDivider(),
-                ],
-                
-                Icon(volume == 0 ? Icons.volume_off : Icons.volume_up, color: Colors.white70, size: 18),
-                SizedBox(
-                  width: isSmall ? 60 : 80,
-                  child: SliderTheme(
-                    data: SliderThemeData(
-                      trackHeight: 2,
-                      thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
-                      overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
-                      activeTrackColor: Colors.white,
-                      inactiveTrackColor: Colors.white24,
-                      thumbColor: Colors.white,
-                    ),
-                    child: Slider(
-                      value: volume,
-                      onChanged: onVolumeChanged,
-                    ),
-                  ),
-                ),
-                const _VerticalDivider(),
-                _DockButton(icon: Icons.keyboard_arrow_down, onPressed: onMinimize),
-                _DockButton(icon: Icons.close, onPressed: onExit, color: Colors.redAccent),
-              ],
+          const _VerticalDivider(),
+          _DockButton(icon: Icons.refresh, onPressed: onReset, isSelected: selectedIndex == 4),
+          const _VerticalDivider(),
+          _DockButton(
+            icon: Icons.bolt, 
+            onPressed: onToggleFastForward, 
+            color: isFastForward ? Colors.yellowAccent : Colors.white70,
+            isSelected: selectedIndex == 5,
+          ),
+          const _VerticalDivider(),
+          
+          if (!Platform.isAndroid) ...[
+            _DockButton(
+              icon: scalingMode == ScalingMode.stretch ? Icons.aspect_ratio : (scalingMode == ScalingMode.fit ? Icons.fit_screen : Icons.zoom_in),
+              onPressed: onCycleScaling,
+              color: Colors.white70,
+              isSelected: selectedIndex == 6,
             ),
-          ),
-        ),
+            const _VerticalDivider(),
+          ],
+
+          // Volume Group (Desktop Only)
+          if (!Platform.isAndroid) ...[
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                color: selectedIndex == 7 ? Colors.white.withOpacity(0.1) : Colors.transparent,
+                border: Border.all(color: selectedIndex == 7 ? Colors.white24 : Colors.transparent),
+              ),
+              child: Row(
+                children: [
+                  Icon(volume == 0 ? Icons.volume_off : Icons.volume_up, color: Colors.white70, size: 18),
+                  SizedBox(
+                    width: isSmall ? 60 : 80,
+                    child: SliderTheme(
+                      data: SliderThemeData(
+                        trackHeight: 2,
+                        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
+                        overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
+                        activeTrackColor: Colors.white,
+                        inactiveTrackColor: Colors.white24,
+                        thumbColor: Colors.white,
+                      ),
+                      child: Slider(
+                        value: volume,
+                        onChanged: onVolumeChanged,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const _VerticalDivider(),
+          ],
+
+          _DockButton(icon: Icons.keyboard_arrow_down, onPressed: onMinimize, isSelected: selectedIndex == (Platform.isAndroid ? 6 : 8)),
+          _DockButton(icon: Icons.close, onPressed: onExit, color: Colors.redAccent, isSelected: selectedIndex == (Platform.isAndroid ? 7 : 9)),
+        ],
       ),
     );
   }
@@ -1258,11 +1138,13 @@ class _DockButton extends StatefulWidget {
   final IconData icon;
   final VoidCallback onPressed;
   final Color color;
+  final bool isSelected;
 
   const _DockButton({
     required this.icon,
     required this.onPressed,
     this.color = Colors.white70,
+    this.isSelected = false,
   });
 
   @override
@@ -1274,23 +1156,20 @@ class _DockButtonState extends State<_DockButton> {
 
   @override
   Widget build(BuildContext context) {
-    return Focus(
-      onFocusChange: (f) => setState(() => _isFocused = f),
-      child: Container(
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          border: Border.all(
-            color: _isFocused ? widget.color : Colors.transparent,
-            width: 2,
-          ),
-          color: _isFocused ? widget.color.withOpacity(0.2) : Colors.transparent,
+    return Container(
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: widget.isSelected ? widget.color : Colors.transparent,
+          width: 2,
         ),
-        child: IconButton(
-          icon: Icon(widget.icon, color: widget.color),
-          onPressed: widget.onPressed,
-          hoverColor: Colors.white.withOpacity(0.1),
-          splashRadius: 24,
-        ),
+        color: widget.isSelected ? widget.color.withOpacity(0.2) : Colors.transparent,
+      ),
+      child: IconButton(
+        icon: Icon(widget.icon, color: widget.color),
+        onPressed: widget.onPressed,
+        hoverColor: Colors.white.withOpacity(0.1),
+        splashRadius: 24,
       ),
     );
   }
@@ -1314,11 +1193,17 @@ class _VerticalDivider extends StatelessWidget {
 
 
 class _EmulatorSurface extends StatelessWidget {
+  final String romPath;
+  final String corePath;
+  final String? systemPath;
   final int? textureId;
   final ScalingMode scalingMode;
   final double coreAspectRatio;
 
   const _EmulatorSurface({
+    required this.romPath,
+    required this.corePath,
+    this.systemPath,
     this.textureId,
     required this.scalingMode,
     required this.coreAspectRatio,
@@ -1337,11 +1222,30 @@ class _EmulatorSurface extends StatelessWidget {
         child = const Center(child: Text("Loading Emulator...", style: TextStyle(color: Colors.white)));
       }
     } else {
-      
-      
-      child = const AndroidView(
+      child = PlatformViewLink(
         viewType: 'com.retrostream.vantage/retro_view',
-        creationParamsCodec: StandardMessageCodec(),
+        surfaceFactory: (context, controller) {
+          return AndroidViewSurface(
+            controller: controller as AndroidViewController,
+            gestureRecognizers: const <Factory<OneSequenceGestureRecognizer>>{},
+            hitTestBehavior: PlatformViewHitTestBehavior.opaque,
+          );
+        },
+        onCreatePlatformView: (params) {
+          return PlatformViewsService.initExpensiveAndroidView(
+            id: params.id,
+            viewType: 'com.retrostream.vantage/retro_view',
+            layoutDirection: TextDirection.ltr,
+            creationParams: {
+              'romPath': romPath,
+              'corePath': corePath,
+              'systemPath': systemPath,
+            },
+            creationParamsCodec: const StandardMessageCodec(),
+          )
+            ..addOnPlatformViewCreatedListener(params.onPlatformViewCreated)
+            ..create();
+        },
       );
     }
 

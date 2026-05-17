@@ -1,4 +1,6 @@
-﻿
+
+
+
 
 
 
@@ -14,14 +16,17 @@
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
-import 'package:path_provider/path_provider.dart';
+import 'package:flutter/services.dart';
 import '../models/core_entry.dart';
+import 'path_service.dart';
+import 'log_service.dart';
 
 class CoreManager {
   CoreManager._();
   static final instance = CoreManager._();
 
   late String _coresDir;
+  late String _systemDir;
   bool _initialized = false;
 
   
@@ -35,6 +40,8 @@ class CoreManager {
     return 'linux';
   }
 
+
+
   
   
   
@@ -44,16 +51,14 @@ class CoreManager {
   
   static String get currentArch {
     if (Platform.isAndroid) {
-      
       return _androidAbi;
     }
-    
-    
-    
     return _desktopArch;
   }
 
-  static String _androidAbi  = 'arm64-v8a';
+
+
+  static String _androidAbi  = 'armeabi-v7a'; // Default to 32-bit for safety, or let detection override
   static String _desktopArch = 'x86_64';
 
   
@@ -67,11 +72,29 @@ class CoreManager {
 
   Future<void> init() async {
     if (_initialized) return;
-    final appDir = await getApplicationSupportDirectory();
-    _coresDir = '${appDir.path}/cores';
+    
+    // Detect Android ABI if on Android
+    if (Platform.isAndroid) {
+      try {
+        final abi = await const MethodChannel('com.retrostream.vantage/emulator').invokeMethod<String>('getAbi');
+        if (abi != null) {
+          _androidAbi = abi;
+          vLog('CORE_MANAGER: DETECTED DEVICE ABI -> $_androidAbi');
+        }
+      } catch (e) {
+        vError('CORE_MANAGER: FAILED TO DETECT ABI', e);
+      }
+    }
+
+    final pathService = PathService.instance;
+    _coresDir = await pathService.coresDir;
+    _systemDir = await pathService.systemDir;
     await Directory(_coresDir).create(recursive: true);
+    await Directory(_systemDir).create(recursive: true);
     _initialized = true;
   }
+
+  String get systemDir => _systemDir;
 
   
   String _installedName(CoreEntry entry) =>
@@ -90,8 +113,9 @@ class CoreManager {
   
   String? corePathForExtension(String ext) {
     final lower = ext.toLowerCase();
+    final platform = currentPlatform;
     for (final entry in coreCatalog) {
-      if (entry.extensions.contains(lower) && isInstalled(entry)) {
+      if (entry.supports(platform) && entry.extensions.contains(lower) && isInstalled(entry)) {
         return pathForCore(entry);
       }
     }
@@ -105,45 +129,71 @@ String? corePathForPlatformTag(String tag) {
   
   const tagToCores = <String, List<String>>{
     'nes':               ['fceumm', 'nestopia', 'mesen'],
-    'snes':              ['snes9x', 'snes9x2010'],
-    'n64':               ['mupen64plus_next_gles3', 'parallel_n64'],
+    'snes':              ['snes9x', 'snes9x2010', 'bsnes'],
+    'n64':               ['mupen64plus_next', 'mupen64plus_next_gles3', 'mupen64plus_next_gles2', 'parallel_n64'],
+    'gb':                ['gambatte', 'sameboy', 'gearboy'],
     'game boy':          ['gambatte', 'sameboy', 'gearboy'],
+    'gbc':               ['gambatte', 'sameboy', 'gearboy'],
     'game boy color':    ['gambatte', 'sameboy', 'gearboy'],
+    'gba':               ['mgba', 'vba_next'],
     'game boy advance':  ['mgba', 'vba_next'],
+    'nds':               ['melondsds', 'melonds', 'desmume'],
     'nintendo ds':       ['melondsds', 'melonds', 'desmume'],
+    '3ds':               ['citra'],
     'nintendo 3ds':      ['citra'],
     'virtual boy':       ['mednafen_vb'],
+    'sms':               ['genesis_plus_gx', 'picodrive'],
     'master system':     ['genesis_plus_gx', 'picodrive'],
-    'game gear':         ['genesis_plus_gx'],
+    'gg':                ['genesis_plus_gx', 'picodrive'],
+    'game gear':         ['genesis_plus_gx', 'picodrive'],
+    'md':                ['genesis_plus_gx', 'picodrive'],
     'sega genesis':      ['genesis_plus_gx', 'picodrive'],
     'sega cd':           ['genesis_plus_gx', 'picodrive'],
     'sega 32x':          ['picodrive'],
     'sega saturn':       ['mednafen_saturn', 'yabasanshiro'],
     'dreamcast':         ['flycast'],
-    'playstation':       ['pcsx_rearmed', 'mednafen_psx'],
-    'playstation 2':     [],
+    'ps1':               ['pcsx_rearmed', 'mednafen_psx', 'swanstation'],
+    'playstation':       ['pcsx_rearmed', 'mednafen_psx', 'swanstation'],
+    'ps2':               ['play'],
+    'playstation 2':     ['play'],
     'psp':               ['ppsspp'],
     'atari 2600':        ['stella'],
     'atari 7800':        ['prosystem'],
+    'atari 800':         ['atari800'],
     'atari lynx':        ['handy'],
+    'tg16':              ['mednafen_pce_fast'],
     'turbografx-16':     ['mednafen_pce_fast'],
+    'pc engine':         ['mednafen_pce_fast'],
     'neogeo pocket':     ['mednafen_ngp'],
     'wonderswan':        ['mednafen_wswan'],
-    'arcade':            ['fbneo', 'mame2003_plus', 'mame2003'],
-    'mame 2003':         ['mame2003_plus', 'mame2003'],
-    'dos':               [],
+    'arcade':            ['fbneo', 'mame2003_plus', 'mame2010'],
+    'mame':              ['mame2003_plus', 'mame2010'],
+    'dos':               ['dosbox_pure'],
     'commodore 64':      ['vice_x64sc'],
+    'amiga':             ['puae'],
+    'msx':               ['bluemsx'],
+    'zx spectrum':       ['fuse'],
     'gamecube':          ['dolphin'],
     'wii':               ['dolphin'],
+    'scummvm':           ['scummvm'],
+    'easyrpg':           ['easyrpg'],
+    'pico-8':            ['retro8'],
+    'tic-80':            ['tic80'],
   };
 
-  final coreIds = tagToCores[lower] ?? [];
+  List<String> coreIds = tagToCores[lower] ?? [];
+  if (Platform.isWindows && lower == 'n64') {
+    coreIds = ['mupen64plus_next', 'parallel_n64', ...coreIds.where((id) => id != 'mupen64plus_next' && id != 'parallel_n64')];
+  } else if (Platform.isAndroid && lower == 'n64') {
+    coreIds = ['mupen64plus_next_gles2', 'parallel_n64', 'mupen64plus_next_gles3'];
+  }
+
   for (final id in coreIds) {
     final entry = coreCatalog.firstWhere(
       (e) => e.id == id,
       orElse: () => coreCatalog.first, 
     );
-    if (entry.id == id && isInstalled(entry)) {
+    if (entry.id == id && entry.supports(currentPlatform) && isInstalled(entry)) {
       return pathForCore(entry);
     }
   }
@@ -166,14 +216,18 @@ String? corePathForPlatformTag(String tag) {
     );
 
     onProgress?.call(0);
+    vLog('STARTING DOWNLOAD: ${entry.displayName} from $url');
 
     final request = http.Request('GET', Uri.parse(url));
     final streamed = await request.send();
     if (streamed.statusCode < 200 || streamed.statusCode >= 300) {
+      vError('DOWNLOAD FAILED: HTTP ${streamed.statusCode} for $url');
       throw Exception('HTTP ${streamed.statusCode} downloading core from $url');
     }
 
     final total = streamed.contentLength ?? 0;
+    vLog('HTTP ${streamed.statusCode} | SIZE: $total bytes');
+    
     var done = 0;
     final chunks = <int>[];
     await for (final chunk in streamed.stream) {
@@ -183,21 +237,25 @@ String? corePathForPlatformTag(String tag) {
     }
 
     onProgress?.call(-1); 
+    vLog('DOWNLOAD COMPLETE | EXTRACTING...');
 
     _extractZip(Uint8List.fromList(chunks), _coresDir, currentPlatform);
+    vLog('EXTRACTION COMPLETE FOR ${entry.displayName}');
   }
 
   void _extractZip(Uint8List bytes, String destDir, String platform) {
-    
-    
+    vLog('PARSING ZIP (${bytes.length} bytes)');
     final files = _parseZip(bytes);
+    vLog('ZIP CONTAINS ${files.length} FILES');
     for (final f in files) {
       final outPath = '$destDir/${f.name}';
+      vLog('WRITING: $outPath (${f.data.length} bytes)');
       File(outPath)
         ..createSync(recursive: true)
         ..writeAsBytesSync(f.data);
       
       if (platform != 'windows') {
+        vLog('SETTING EXECUTE PERMISSION: $outPath');
         Process.runSync('chmod', ['+x', outPath]);
       }
     }

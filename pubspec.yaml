@@ -1,4 +1,4 @@
-﻿name: vantage
+name: vantage
 description: Jellyfin game library frontend — Flutter port
 publish_to: 'none'
 version: 1.0.0+1
@@ -31,6 +31,9 @@ dependencies:
   path: ^1.9.0
   url_launcher: ^6.3.2
   gamepads: ^0.1.10+2
+  intl: ^0.20.2
+  app_links: ^7.0.0
+  win32_registry: ^2.1.0
 
 dev_dependencies:
   flutter_test:

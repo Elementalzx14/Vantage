@@ -1,4 +1,4 @@
-﻿#ifndef LIBRETRO_CORE_H_
+#ifndef LIBRETRO_CORE_H_
 #define LIBRETRO_CORE_H_
 
 #include <string>
@@ -6,8 +6,10 @@
 #include <mutex>
 #include <thread>
 #include <atomic>
+#include <map>
 #include <functional>
 #include "libretro.h"
+#include "gl_render_context.h"
 
 
 #ifdef _WIN32
@@ -27,6 +29,8 @@ public:
     bool LoadGame(const std::string& rom_path);
     void Unload();
     void Reset();
+
+    void SetSystemPath(const std::string& path) { system_path_ = path; }
 
     std::vector<uint8_t> SaveState();
     bool LoadState(const std::vector<uint8_t>& state);
@@ -108,8 +112,7 @@ private:
     size_t video_pitch_ = 0;
     std::mutex video_mutex_;
 
-    
-    retro_pixel_format pixel_format_ = RETRO_PIXEL_FORMAT_0RGB1555;
+
 
     
     std::thread run_thread_;
@@ -130,9 +133,29 @@ private:
 
     void ThreadLoop();
 
+    bool game_loaded_ = false;
+
+    // Graphics context
+    GLRenderContext gl_context_;
+    bool hw_render_enabled_ = false;
+    struct retro_hw_render_callback hw_render_cb_ = {0};
+    struct retro_hw_render_context_negotiation_interface hw_render_negotiation_ = {0};
+    int pbo_index_ = 0;
+
+    static uintptr_t gl_get_framebuffer_cb();
+    static retro_proc_address_t gl_get_proc_address_cb(const char *sym);
+
+    // Callbacks from core
+    struct retro_audio_callback audio_cb_ = {0};
+    struct retro_frame_time_callback frame_time_cb_ = {0};
+    struct retro_vfs_interface vfs_interface_ = {0};
+
+    std::string system_path_;
+    std::map<std::string, std::string> variable_defaults_;
+    retro_pixel_format pixel_format_ = RETRO_PIXEL_FORMAT_0RGB1555;
+
 private:
     double aspect_ratio_ = 4.0 / 3.0; 
 };
 
-#endif 
-
+#endif

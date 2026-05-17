@@ -1,7 +1,9 @@
-﻿
 
 
+
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'services/prefs.dart';
 import 'services/core_manager.dart';
@@ -11,17 +13,47 @@ import 'screens/login_screen.dart';
 import 'screens/library_screen.dart';
 import 'screens/cores_screen.dart';
 import 'screens/emulator_screen.dart';
+import 'services/path_service.dart';
+import 'services/log_service.dart';
+import 'services/protocol_handler_windows.dart';
+import 'services/deep_link_service.dart';
+import 'services/launch_service.dart';
+import 'screens/item_details_screen.dart';
+import 'models/jellyfin_models.dart';
+import 'screens/input_manager_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  
+  await PathService.instance.init();
+  await LogService.instance.init();
+  
+  if (Platform.isAndroid) {
+    try {
+      final abi = await const MethodChannel('com.retrostream.vantage/emulator').invokeMethod<String>('getAbi');
+      if (abi != null) {
+        CoreManager.setAndroidAbi(abi);
+        vLog('DEVICE ABI DETECTED: $abi');
+      }
+    } catch (e) {
+      vError('FAILED TO DETECT ABI', e);
+    }
+  }
+
   await CoreManager.instance.init();
   await ThemeService.instance.init();
+  
+  if (Platform.isWindows) {
+    await ProtocolHandlerWindows.register('vantage');
+  }
+
   runApp(const VantageApp());
 }
 
 final _prefs = Prefs();
 
-final _router = GoRouter(
+final router = GoRouter(
   initialLocation: '/loading',
   routes: [
     GoRoute(
@@ -41,6 +73,10 @@ final _router = GoRouter(
       builder: (_, __) => const CoresScreen(),
     ),
     GoRoute(
+      path: '/inputs',
+      builder: (_, __) => const InputManagerScreen(),
+    ),
+    GoRoute(
       path: '/emulator',
       builder: (_, state) {
         final args = state.extra as Map<String, dynamic>;
@@ -55,11 +91,34 @@ final _router = GoRouter(
         );
       },
     ),
+    GoRoute(
+      path: '/details',
+      builder: (_, state) {
+        final args = state.extra as Map<String, dynamic>;
+        return ItemDetailsScreen(
+          item: args['item'] as JfItem,
+          serverUrl: args['serverUrl'] as String,
+          token: args['token'] as String,
+          userId: args['userId'] as String,
+        );
+      },
+    ),
   ],
 );
 
-class VantageApp extends StatelessWidget {
+class VantageApp extends StatefulWidget {
   const VantageApp({super.key});
+
+  @override
+  State<VantageApp> createState() => _VantageAppState();
+}
+
+class _VantageAppState extends State<VantageApp> {
+  @override
+  void initState() {
+    super.initState();
+    DeepLinkService.instance.init();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -72,7 +131,15 @@ class VantageApp extends StatelessWidget {
           title: 'Vantage',
           debugShowCheckedModeBanner: false,
           theme: _buildDynamicNasaTheme(nasaTheme),
-          routerConfig: _router,
+          routerConfig: router,
+          builder: (context, child) {
+            return Stack(
+              children: [
+                if (child != null) child,
+                _GlobalLaunchOverlay(),
+              ],
+            );
+          },
         );
       },
     );
@@ -128,6 +195,78 @@ class VantageApp extends StatelessWidget {
   }
 }
 
+class _GlobalLaunchOverlay extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: LaunchService.instance.statusMessage,
+      builder: (context, _) {
+        final msg = LaunchService.instance.statusMessage.value;
+        if (msg == null) return const SizedBox.shrink();
+
+        return Material(
+          color: Colors.black54,
+          child: Center(
+            child: Container(
+              padding: const EdgeInsets.all(32),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1A1A1A),
+                borderRadius: BorderRadius.circular(32),
+                border: Border.all(color: const Color(0xFFFF5C00).withOpacity(0.3)),
+                boxShadow: [
+                  BoxShadow(color: const Color(0xFFFF5C00).withOpacity(0.1), blurRadius: 40, spreadRadius: 10),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.rocket_launch, size: 48, color: Color(0xFFFF5C00)),
+                  const SizedBox(height: 24),
+                  Text(
+                    msg,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 2,
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  ValueListenableBuilder<int?>(
+                    valueListenable: LaunchService.instance.downloadProgress,
+                    builder: (context, pct, _) {
+                      if (pct == null) return const SizedBox.shrink();
+                      return Column(
+                        children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(4),
+                            child: LinearProgressIndicator(
+                              value: pct < 0 ? null : pct / 100.0,
+                              backgroundColor: Colors.white10,
+                              color: const Color(0xFFFF5C00),
+                              minHeight: 6,
+                            ),
+                          ),
+                          if (pct >= 0) ...[
+                            const SizedBox(height: 12),
+                            Text(
+                              '$pct%',
+                              style: const TextStyle(color: Color(0xFFFF5C00), fontSize: 10, fontWeight: FontWeight.bold),
+                            ),
+                          ],
+                        ],
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
 
 class _SplashScreen extends StatefulWidget {
   const _SplashScreen();

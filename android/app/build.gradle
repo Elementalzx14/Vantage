@@ -61,5 +61,5 @@ flutter {
 }
 
 dependencies {
-    implementation 'com.github.Swordfish90:libretrodroid:0.8.0'
+    implementation 'com.github.swordfish90:libretrodroid:0.13.2'
 }
