@@ -1,7 +1,8 @@
-﻿
+
 
 
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import '../models/jellyfin_models.dart';
@@ -54,13 +55,14 @@ class JellyfinApi {
     bool recursive = true,
     int startIndex = 0,
     int limit = 20,
+    String? tag,
   }) async {
     final params = {
       'Recursive': '$recursive',
       'StartIndex': '$startIndex',
       'Limit': '$limit',
-      'Fields': 'ImageTags,MediaType,Tags',
-      'Tags': 'JellyEmu',
+      'Fields': 'ImageTags,MediaType,Tags,Path',
+      'Tags': tag ?? 'JellyEmu',
       'SortBy': 'SortName',
       'SortOrder': 'Ascending',
       if (parentId != null) 'ParentId': parentId,
@@ -95,6 +97,23 @@ class JellyfinApi {
         jsonDecode(response.body) as Map<String, dynamic>);
   }
 
+  Future<JfItem> getItem(
+    String serverUrl,
+    String token,
+    String userId,
+    String itemId,
+  ) async {
+    final uri = Uri.parse('${serverUrl.trimRight()}/Users/$userId/Items/$itemId');
+    final response = await http
+        .get(uri, headers: _headers(token: token))
+        .timeout(const Duration(seconds: 30));
+
+    if (!response.statusCode.isSuccess) {
+      throw Exception('getItem failed (${response.statusCode}): ${response.body}');
+    }
+    return JfItem.fromJson(jsonDecode(response.body) as Map<String, dynamic>);
+  }
+
   Future<Uint8List?> downloadSave(
     String serverUrl,
     String token,
@@ -112,6 +131,46 @@ class JellyfinApi {
       throw Exception('Download save failed (${response.statusCode})');
     }
     return response.bodyBytes;
+  }
+
+  Future<DateTime?> getSaveMetadata(
+    String serverUrl,
+    String token,
+    String userId,
+    String itemId, {
+    int? slot,
+  }) async {
+    var url = '${serverUrl.trimRight()}/jellyemu/save/$itemId/$userId';
+    if (slot != null) url += '?slot=$slot';
+
+    try {
+      final response = await http
+          .head(Uri.parse(url), headers: _headers(token: token))
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final lm = response.headers['last-modified'];
+        if (lm != null) {
+          // RFC 1123 format usually
+          return DateTime.tryParse(lm) ?? _parseHttpDate(lm);
+        }
+        // If 200 but no header, just return a generic "now" or indicate existence
+        return DateTime.now();
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  DateTime? _parseHttpDate(String date) {
+    try {
+      return HttpDate.parse(date);
+    } catch (_) {
+      try {
+        return DateTime.parse(date);
+      } catch (_) {
+        return null;
+      }
+    }
   }
 
   Future<void> uploadSave(

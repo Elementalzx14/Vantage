@@ -1,8 +1,8 @@
-﻿
 
 
 
-const Map<String, String> _platformAliases = {
+
+const Map<String, String> platformAliases = {
   'nes': 'NES', 'famicom': 'NES', 'nintendo': 'NES',
   'nintendo entertainment system': 'NES',
 
@@ -43,6 +43,8 @@ const Map<String, String> _platformAliases = {
 
   'psx': 'PlayStation', 'ps1': 'PlayStation', 'playstation': 'PlayStation',
   'playstation 1': 'PlayStation', 'ps one': 'PlayStation',
+  'ps': 'PlayStation', 'sony playstation': 'PlayStation',
+  'sony playstation 1': 'PlayStation', 'playstation1': 'PlayStation',
 
   'atari 2600': 'Atari 2600', '2600': 'Atari 2600',
   'atari 7800': 'Atari 7800', '7800': 'Atari 7800',
@@ -92,13 +94,73 @@ const Map<String, String> _platformAliases = {
 
 String? resolvePlatformTag(List<String>? tags) {
   if (tags == null || tags.isEmpty) return null;
+  
+  // 1. Exact or direct lowercase match (fastest & highest priority)
   for (final tag in tags) {
-    final exact = _platformAliases[tag];
+    final exact = platformAliases[tag];
     if (exact != null) return exact;
-    final lower = tag.toLowerCase();
-    final ci = _platformAliases[lower];
+    final lower = tag.toLowerCase().trim();
+    final ci = platformAliases[lower];
     if (ci != null) return ci;
   }
+
+  // 2. Substring matching fallback (for decorated tags like "Sony PlayStation" or "PlayStation (USA)")
+  for (final tag in tags) {
+    final lower = tag.toLowerCase();
+    
+    if (lower.contains('playstation') || lower.contains('ps1') || lower.contains('psx')) {
+      return 'PlayStation';
+    }
+    if (lower.contains('saturn')) {
+      return 'Sega Saturn';
+    }
+    if (lower.contains('genesis') || lower.contains('megadrive') || lower.contains('mega drive')) {
+      return 'Sega Genesis';
+    }
+    if (lower.contains('dreamcast') || lower.contains('dc')) {
+      return 'Sega Dreamcast';
+    }
+    if (lower.contains('game boy advance') || lower.contains('gameboy advance') || lower.contains('gba')) {
+      return 'Game Boy Advance';
+    }
+    if (lower.contains('game boy color') || lower.contains('gameboy color') || lower.contains('gbc')) {
+      return 'Game Boy Color';
+    }
+    if (lower.contains('game boy') || lower.contains('gameboy') || lower.contains('gb')) {
+      return 'Game Boy';
+    }
+    if (lower.contains('nintendo 64') || lower.contains('n64')) {
+      return 'N64';
+    }
+    if (lower.contains('super nintendo') || lower.contains('snes') || lower.contains('super famicom')) {
+      return 'SNES';
+    }
+    if (lower.contains('nintendo entertainment system') || lower.contains('nes') || lower.contains('famicom')) {
+      return 'NES';
+    }
+    if (lower.contains('gamecube') || lower.contains('gc')) {
+      return 'GameCube';
+    }
+    if (lower.contains('wii u') || lower.contains('wiiu')) {
+      return 'Wii U';
+    }
+    if (lower.contains('wii')) {
+      return 'Wii';
+    }
+    if (lower.contains('switch')) {
+      return 'Nintendo Switch';
+    }
+    if (lower.contains('nintendo ds') || lower.contains('nds') || lower.contains(' ds')) {
+      return 'Nintendo DS';
+    }
+    if (lower.contains('playstation portable') || lower.contains('psp')) {
+      return 'PSP';
+    }
+    if (lower.contains('playstation 2') || lower.contains('ps2')) {
+      return 'PlayStation 2';
+    }
+  }
+
   return null;
 }
 
@@ -201,7 +263,7 @@ class JfItem {
 
   String downloadUrl(String server) {
     final fileName =
-        path != null ? path!.split('/').last : '$id.rom';
+        path != null ? path!.replaceAll('\\', '/').split('/').last : '$id.rom';
     final encoded = Uri.encodeComponent(fileName);
     return '$server/jellyemu/rom/$id/$encoded';
   }

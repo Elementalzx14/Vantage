@@ -1,9 +1,10 @@
-﻿
+
 
 
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
@@ -12,6 +13,7 @@ import '../services/jellyfin_api.dart';
 import '../services/prefs.dart';
 import '../services/core_manager.dart';
 import '../services/theme_service.dart';
+import '../services/launch_service.dart';
 import '../widgets/theme_selector_dialog.dart';
 
 class LibraryScreen extends StatefulWidget {
@@ -26,13 +28,15 @@ class _LibraryScreenState extends State<LibraryScreen> {
   final _api = JellyfinApi();
   final _scrollCtrl = ScrollController();
 
+  final List<JfItem> _allGames = [];
   final List<JfItem> _items = [];
-  final Map<String, int> _downloading = {}; 
+  final List<String> _allPlatforms = [];
+  final Map<String, int> _downloading = {};
 
-  int _nextIndex = 0;
+  int _visibleCount = 24;
   bool _isLoading = false;
-  bool _hasMore = true;
-  static const _pageSize = 24;
+
+  String? _selectedPlatform;
 
   String _serverUrl = '';
   String _token = '';
@@ -55,50 +59,86 @@ class _LibraryScreenState extends State<LibraryScreen> {
     _serverUrl = await _prefs.serverUrl;
     _token = await _prefs.token;
     _userId = await _prefs.userId;
-    _loadItems(refresh: true);
+    await _loadAllGames();
   }
 
   void _onScroll() {
-    if (!_isLoading && _hasMore &&
-        _scrollCtrl.position.pixels >= _scrollCtrl.position.maxScrollExtent - 400) {
-      _loadItems();
+    if (_scrollCtrl.position.pixels >= _scrollCtrl.position.maxScrollExtent - 400) {
+      _loadMoreVisible();
     }
   }
 
-  Future<void> _loadItems({bool refresh = false}) async {
+  Future<void> _loadAllGames() async {
     if (_isLoading) return;
     setState(() => _isLoading = true);
-
-    if (refresh) {
-      _nextIndex = 0;
-      _hasMore = true;
-      _items.clear();
-    }
 
     try {
       final result = await _api.getItems(
         _serverUrl, _token, _userId,
         recursive: true,
         includeItemTypes: 'Game',
-        startIndex: _nextIndex,
-        limit: _pageSize,
+        limit: 10000,
       );
 
-      final newItems = result.items
+      final validGames = result.items
           .where((item) => item.isGame && item.tags?.any((t) => t.toLowerCase() == 'pico-8') != true)
           .toList();
 
+      final platforms = <String>{};
+      for (final item in validGames) {
+        final tag = item.platformTag;
+        if (tag != null) {
+          platforms.add(tag);
+        }
+      }
+
+      print('VANTAGE_LIB: Retrieved ${result.items.length} raw items, ${validGames.length} valid games.');
+      print('VANTAGE_LIB: Unique Platforms found: ${platforms.toList()..sort()}');
+
       setState(() {
-        _items.addAll(newItems);
-        _nextIndex += result.items.length;
-        _hasMore = result.items.length >= _pageSize;
+        _allGames.clear();
+        _allGames.addAll(validGames);
+        _allPlatforms.clear();
+        _allPlatforms.addAll(platforms.toList()..sort());
+        _updateVisibleItems(refresh: true);
       });
     } catch (e) {
-      _snack('ERROR: UPLINK_FAILURE [\$e]');
+      _snack('ERROR: UPLINK_FAILURE [$e]');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
   }
+
+  void _updateVisibleItems({bool refresh = false}) {
+    if (refresh) {
+      _visibleCount = 24;
+    }
+
+    final filtered = _allGames.where((item) {
+      if (_selectedPlatform == null) return true;
+      return item.platformTag == _selectedPlatform;
+    }).toList();
+
+    setState(() {
+      _items.clear();
+      _items.addAll(filtered.take(_visibleCount));
+    });
+  }
+
+  void _loadMoreVisible() {
+    final totalFiltered = _allGames.where((item) {
+      if (_selectedPlatform == null) return true;
+      return item.platformTag == _selectedPlatform;
+    }).length;
+
+    if (_visibleCount < totalFiltered) {
+      setState(() {
+        _visibleCount += 24;
+        _updateVisibleItems();
+      });
+    }
+  }
+
 
   Future<void> _purgeAllCache() async {
     final cacheDir = await getTemporaryDirectory();
@@ -119,28 +159,24 @@ class _LibraryScreenState extends State<LibraryScreen> {
     }
   }
 
+  void _openDetails(JfItem item) {
+    context.push('/details', extra: {
+      'item': item,
+      'serverUrl': _serverUrl,
+      'token': _token,
+      'userId': _userId,
+    }).then((_) {
+      // Refresh cache labels when returning
+      setState(() {});
+    });
+  }
+
   Future<void> _launchGame(JfItem item) async {
-    final localFile = await _localRomFile(item);
-    if (await localFile.exists()) {
-      if (await localFile.length() > 1024) {
-        _startEmulator(localFile.path, item);
-        return;
-      }
-      await localFile.delete();
-    }
-
-    final downloadUrl = item.downloadUrl(_serverUrl);
-    setState(() => _downloading[item.id] = -1);
-
     try {
-      await _downloadRom(downloadUrl, localFile, (pct) {
-        setState(() => _downloading[item.id] = pct);
-      });
-      _startEmulator(localFile.path, item);
+      await LaunchService.instance.launchGame(item);
+      setState(() {}); // Update to show 'CACHED' tag if it was downloaded
     } catch (e) {
-      _snack('ERROR: DOWNLOAD ABORTED [\$e]');
-    } finally {
-      setState(() => _downloading.remove(item.id));
+      _snack('ERROR: LAUNCH FAILED');
     }
   }
 
@@ -155,50 +191,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
     );
   }
 
-  void _startEmulator(String romPath, JfItem item) {
-    final ext = romPath.split('.').last;
-    final corePath = (item.platformTag != null
-        ? CoreManager.instance.corePathForPlatformTag(item.platformTag!)
-        : null) ?? CoreManager.instance.corePathForExtension(ext);
-    
-    if (corePath == null) {
-      _snack('ERROR: CORE NOT FOUND');
-      return;
-    }
-    context.push('/emulator', extra: {
-      'romPath': romPath,
-      'corePath': corePath,
-      'title': item.name,
-      'itemId': item.id,
-      'serverUrl': _serverUrl,
-      'token': _token,
-      'userId': _userId,
-    });
-  }
-
-  Future<File> _localRomFile(JfItem item) async {
-    final cacheDir = await getTemporaryDirectory();
-    final ext = item.path?.split('.').last ?? 'rom';
-    final safe = item.name.replaceAll(RegExp(r'[^a-zA-Z0-9._\- ]'), '_');
-    return File('${cacheDir.path}/roms/${item.id}/$safe.$ext');
-  }
-
-  Future<void> _downloadRom(String url, File dest, void Function(int) onProgress) async {
-    await dest.parent.create(recursive: true);
-    final request = http.Request('GET', Uri.parse(url));
-    final streamed = await request.send();
-    if (streamed.statusCode < 200 || streamed.statusCode >= 300) throw Exception('HTTP ${streamed.statusCode}');
-    final total = streamed.contentLength ?? 0;
-    var done = 0;
-    final sink = dest.openWrite();
-    onProgress(-1);
-    await for (final chunk in streamed.stream) {
-      sink.add(chunk);
-      done += chunk.length;
-      if (total > 0) onProgress((done * 100 ~/ total));
-    }
-    await sink.close();
-  }
+  Future<File> _localRomFile(JfItem item) => LaunchService.instance.getLocalRomFile(item);
 
   Future<void> _logout() async {
     await _prefs.logout();
@@ -227,18 +220,19 @@ class _LibraryScreenState extends State<LibraryScreen> {
         title: const Text('LIBRARY'),
         actions: isSmall 
           ? [
-              _StatusCounter(count: _items.length),
               PopupMenuButton<String>(
                 icon: const Icon(Icons.more_vert, size: 20),
                 onSelected: (val) {
-                  if (val == 'sync') _loadItems(refresh: true);
+                  if (val == 'sync') _loadAllGames();
                   if (val == 'cores') context.push('/cores');
+                  if (val == 'inputs') context.push('/inputs');
                   if (val == 'purge') _purgeAllCache();
                   if (val == 'logout') _logout();
                 },
                 itemBuilder: (ctx) => [
                   const PopupMenuItem(value: 'sync', child: Text('SYNC')),
                   const PopupMenuItem(value: 'cores', child: Text('CORE MGR')),
+                  const PopupMenuItem(value: 'inputs', child: Text('INPUT MAP')),
                   const PopupMenuItem(value: 'purge', child: Text('PURGE CACHE', style: TextStyle(color: Colors.redAccent))),
                   const PopupMenuItem(value: 'logout', child: Text('LOGOUT', style: TextStyle(color: Color(0xFFFF5C00)))),
                 ],
@@ -247,17 +241,20 @@ class _LibraryScreenState extends State<LibraryScreen> {
               const SizedBox(width: 8),
             ]
           : [
-              _StatusCounter(count: _items.length),
-              const SizedBox(width: 8),
               IconButton(
                 icon: const Icon(Icons.refresh, size: 20),
-                onPressed: () => _loadItems(refresh: true),
+                onPressed: _loadAllGames,
                 tooltip: 'SYNC',
               ),
               IconButton(
                 icon: const Icon(Icons.memory, size: 20),
                 onPressed: () => context.push('/cores'),
                 tooltip: 'CORE MGR',
+              ),
+              IconButton(
+                icon: const Icon(Icons.gamepad, size: 20),
+                onPressed: () => context.push('/inputs'),
+                tooltip: 'INPUT MAP',
               ),
               IconButton(
                 icon: const Icon(Icons.delete_sweep, size: 20, color: Colors.redAccent),
@@ -275,67 +272,98 @@ class _LibraryScreenState extends State<LibraryScreen> {
       ),
       body: Stack(
         children: [
-          
           _LibraryBackground(isDark: isDark),
 
-          
-          _items.isEmpty && !_isLoading
-              ? const Center(child: Text('NO RECORDS FOUND', style: TextStyle(color: Colors.black26, fontWeight: FontWeight.bold, letterSpacing: 2)))
-              : GridView.builder(
-                  controller: _scrollCtrl,
-                  padding: const EdgeInsets.all(24),
-                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: _spanCount(context),
-                    crossAxisSpacing: 24,
-                    mainAxisSpacing: 24,
-                    childAspectRatio: 0.72,
-                  ),
-                  itemCount: _items.length + (_isLoading ? 1 : 0),
-                  itemBuilder: (ctx, i) {
-                    if (i == _items.length) {
-                      return const Center(child: CircularProgressIndicator(color: Color(0xFFFF5C00)));
-                    }
-                    return FutureBuilder<bool>(
-                      future: _localRomFile(_items[i]).then((f) => f.exists()),
-                      builder: (ctx, snapshot) {
-                        return _NasaGameCard(
-                          item: _items[i],
-                          serverUrl: _serverUrl,
-                          token: _token,
-                          downloadProgress: _downloading[_items[i].id],
-                          hasLocal: snapshot.data ?? false,
-                          onTap: () => _launchGame(_items[i]),
-                          onDelete: () => _deleteRom(_items[i]),
-                        );
-                      }
-                    );
-                  },
+          SafeArea(
+            top: false,
+            bottom: true,
+            child: Column(
+              children: [
+                _buildSystemFilterRow(),
+                Expanded(
+                  child: _items.isEmpty && !_isLoading
+                      ? const Center(child: Text('NO GAMES FOUND FOR THIS SYSTEM', style: TextStyle(color: Colors.black26, fontWeight: FontWeight.bold, letterSpacing: 2)))
+                      : GridView.builder(
+                          controller: _scrollCtrl,
+                          padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+                          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: _spanCount(context),
+                            crossAxisSpacing: 24,
+                            mainAxisSpacing: 24,
+                            childAspectRatio: 0.72,
+                          ),
+                          itemCount: _items.length + (_isLoading ? 1 : 0),
+                          itemBuilder: (ctx, i) {
+                            if (i == _items.length) {
+                              return const Center(child: CircularProgressIndicator(color: Color(0xFFFF5C00)));
+                            }
+                            return FutureBuilder<bool>(
+                              future: _localRomFile(_items[i]).then((f) => f.exists()),
+                              builder: (ctx, snapshot) {
+                                return _NasaGameCard(
+                                  item: _items[i],
+                                  serverUrl: _serverUrl,
+                                  token: _token,
+                                  downloadProgress: LaunchService.instance.downloadProgress.value,
+                                  hasLocal: snapshot.data ?? false,
+                                  onTap: () => _openDetails(_items[i]),
+                                  onDelete: () => _deleteRom(_items[i]),
+                                );
+                              }
+                            );
+                          },
+                        ),
                 ),
+              ],
+            ),
+          ),
         ],
       ),
     );
   }
-}
 
-class _StatusCounter extends StatelessWidget {
-  final int count;
-  const _StatusCounter({required this.count});
+  Widget _buildSystemFilterRow() {
+    if (_allPlatforms.isEmpty) return const SizedBox.shrink();
 
-  @override
-  Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFF5C00).withOpacity(0.1),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Text(
-        'RECORDS: $count',
-        style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w900, color: Color(0xFFFF5C00)),
+      height: 60,
+      margin: const EdgeInsets.symmetric(vertical: 16),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: Row(
+          children: [
+            _TvFilterChip(
+              label: 'ALL',
+              isSelected: _selectedPlatform == null,
+              onTap: () {
+                if (_selectedPlatform != null) {
+                  setState(() => _selectedPlatform = null);
+                  _updateVisibleItems(refresh: true);
+                }
+              },
+            ),
+            for (final plat in _allPlatforms) ...[
+              const SizedBox(width: 12),
+              _TvFilterChip(
+                label: plat,
+                isSelected: _selectedPlatform == plat,
+                onTap: () {
+                  if (_selectedPlatform != plat) {
+                    setState(() => _selectedPlatform = plat);
+                    _updateVisibleItems(refresh: true);
+                  }
+                },
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
 }
+
+
 
 class _ThemeToggleButton extends StatefulWidget {
   @override
@@ -430,6 +458,17 @@ class _NasaGameCardState extends State<_NasaGameCard> {
 
     return Focus(
       onFocusChange: (f) => setState(() => _isFocused = f),
+      onKeyEvent: (node, event) {
+        if (event is KeyDownEvent && (
+          event.logicalKey == LogicalKeyboardKey.select ||
+          event.logicalKey == LogicalKeyboardKey.enter ||
+          event.logicalKey == LogicalKeyboardKey.gameButtonA
+        )) {
+          if (!downloading) widget.onTap();
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
       child: InkWell(
         onTap: downloading ? null : widget.onTap,
         onLongPress: () => _showContextMenu(context),
@@ -463,18 +502,7 @@ class _NasaGameCardState extends State<_NasaGameCard> {
                 errorWidget: (_, __, ___) => Container(color: Colors.black.withOpacity(0.05), child: const Center(child: Icon(Icons.broken_image, color: Colors.black12))),
               ),
 
-              
-              Positioned(
-                top: 8, left: 8,
-                child: GestureDetector(
-                  onTap: () => _showContextMenu(context),
-                  child: Container(
-                    padding: const EdgeInsets.all(4),
-                    decoration: BoxDecoration(color: Colors.black.withOpacity(0.4), borderRadius: BorderRadius.circular(8)),
-                    child: const Icon(Icons.more_vert, color: Colors.white70, size: 16),
-                  ),
-                ),
-              ),
+
               if (widget.hasLocal)
                 Positioned(
                   top: 12, right: 12,
@@ -556,5 +584,79 @@ class _LibraryGridPainter extends CustomPainter {
   }
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _TvFilterChip extends StatefulWidget {
+  final String label;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  const _TvFilterChip({
+    required this.label,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  @override
+  State<_TvFilterChip> createState() => _TvFilterChipState();
+}
+
+class _TvFilterChipState extends State<_TvFilterChip> {
+  bool _isFocused = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Focus(
+      onFocusChange: (focused) => setState(() => _isFocused = focused),
+      onKeyEvent: (node, event) {
+        if (event is KeyDownEvent && (
+          event.logicalKey == LogicalKeyboardKey.enter ||
+          event.logicalKey == LogicalKeyboardKey.select ||
+          event.logicalKey == LogicalKeyboardKey.space ||
+          event.logicalKey == LogicalKeyboardKey.gameButtonA
+        )) {
+          widget.onTap();
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          curve: Curves.easeOut,
+          transform: Matrix4.identity()..scale(_isFocused ? 1.08 : 1.0),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+          decoration: BoxDecoration(
+            color: widget.isSelected 
+                ? const Color(0xFFFF5C00) 
+                : (_isFocused ? Colors.white24 : Colors.white.withOpacity(0.05)),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: _isFocused ? Colors.white : (widget.isSelected ? const Color(0xFFFF5C00) : Colors.white10),
+              width: _isFocused ? 2.5 : 1.5,
+            ),
+            boxShadow: [
+              if (_isFocused || widget.isSelected)
+                BoxShadow(
+                  color: const Color(0xFFFF5C00).withOpacity(widget.isSelected ? 0.3 : 0.15),
+                  blurRadius: 10,
+                  spreadRadius: 1,
+                ),
+            ],
+          ),
+          child: Text(
+            widget.label.toUpperCase(),
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 13,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 1.0,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 

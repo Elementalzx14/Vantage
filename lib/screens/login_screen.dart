@@ -1,4 +1,4 @@
-﻿
+
 
 
 import 'dart:ui';
@@ -117,12 +117,16 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
           Positioned.fill(child: _ModernNasaBackground(isDark: isDark)),
 
           
-          Center(
-            child: SingleChildScrollView(
-              padding: EdgeInsets.all(isSmall ? 16 : 32),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(maxWidth: isSmall ? size.width * 0.9 : 400),
-                child: _buildLoginCard(theme, isDark, isSmall),
+          SafeArea(
+            top: false,
+            bottom: true,
+            child: Center(
+              child: SingleChildScrollView(
+                padding: EdgeInsets.all(isSmall ? 16 : 32),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: isSmall ? size.width * 0.9 : 400),
+                  child: _buildLoginCard(theme, isDark, isSmall),
+                ),
               ),
             ),
           ),

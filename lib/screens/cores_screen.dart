@@ -1,8 +1,9 @@
-﻿
+
 
 
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../models/core_entry.dart';
 import '../services/core_manager.dart';
 import '../services/theme_service.dart';
@@ -59,6 +60,18 @@ class _CoresScreenState extends State<CoresScreen> {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
+    
+    final grouped = <String, List<CoreEntry>>{};
+    final currentPlatform = CoreManager.currentPlatform;
+
+    for (final core in coreCatalog) {
+      if (core.supports(currentPlatform)) {
+        grouped.putIfAbsent(core.system, () => []).add(core);
+      }
+    }
+
+    final categories = grouped.keys.toList();
+
     return Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor,
       appBar: AppBar(
@@ -71,16 +84,44 @@ class _CoresScreenState extends State<CoresScreen> {
       body: Stack(
         children: [
           _CoresBackground(isDark: isDark),
-          ListView.separated(
-            padding: const EdgeInsets.all(24),
-            itemCount: coreCatalog.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 12),
-            itemBuilder: (ctx, i) => _NasaCoreCard(
-              entry: coreCatalog[i],
-              installed: CoreManager.instance.isInstalled(coreCatalog[i]),
-              downloadProgress: _downloading[coreCatalog[i].id],
-              onDownload: () => _downloadCore(coreCatalog[i]),
-              onDelete: () => _deleteCore(coreCatalog[i]),
+          SafeArea(
+            top: false,
+            bottom: true,
+            child: ListView.builder(
+              padding: const EdgeInsets.all(24),
+              itemCount: categories.length,
+              itemBuilder: (ctx, catIdx) {
+                final cat = categories[catIdx];
+                final cores = grouped[cat]!;
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(left: 8, bottom: 16, top: 8),
+                      child: Text(
+                        cat.toUpperCase(),
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 4,
+                          color: theme.colorScheme.primary.withOpacity(0.5),
+                        ),
+                      ),
+                    ),
+                    ...cores.map((core) => Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: _NasaCoreCard(
+                        entry: core,
+                        installed: CoreManager.instance.isInstalled(core),
+                        downloadProgress: _downloading[core.id],
+                        onDownload: () => _downloadCore(core),
+                        onDelete: () => _deleteCore(core),
+                      ),
+                    )).toList(),
+                    const SizedBox(height: 24),
+                  ],
+                );
+              },
             ),
           ),
         ],
@@ -137,29 +178,7 @@ class _NasaCoreCard extends StatelessWidget {
               ),
               if (!isDownloading) ...[
                 if (installed)
-                  StatefulBuilder(
-                    builder: (context, setIconState) {
-                      bool isFocused = false;
-                      return Focus(
-                        onFocusChange: (f) => setIconState(() => isFocused = f),
-                        child: Container(
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: isFocused ? Colors.redAccent : Colors.transparent,
-                              width: 2,
-                            ),
-                            color: isFocused ? Colors.redAccent.withOpacity(0.1) : Colors.transparent,
-                          ),
-                          child: IconButton(
-                            icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
-                            onPressed: onDelete,
-                            tooltip: 'PURGE',
-                          ),
-                        ),
-                      );
-                    }
-                  ),
+                  _DeleteButton(onPressed: onDelete),
                 const SizedBox(width: 8),
                 _ActionButton(onPressed: onDownload, text: installed ? 'UPDATE' : 'INSTALL'),
               ],
@@ -202,6 +221,17 @@ class _ActionButtonState extends State<_ActionButton> {
   Widget build(BuildContext context) {
     return Focus(
       onFocusChange: (f) => setState(() => _isFocused = f),
+      onKeyEvent: (node, event) {
+        if (event is KeyDownEvent && (
+          event.logicalKey == LogicalKeyboardKey.select ||
+          event.logicalKey == LogicalKeyboardKey.enter ||
+          event.logicalKey == LogicalKeyboardKey.gameButtonA
+        )) {
+          widget.onPressed();
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
       child: AnimatedScale(
         scale: _isFocused ? 1.05 : 1.0,
         duration: const Duration(milliseconds: 200),
@@ -290,3 +320,48 @@ class _CoresGridPainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
+
+class _DeleteButton extends StatefulWidget {
+  final VoidCallback onPressed;
+  const _DeleteButton({required this.onPressed});
+
+  @override
+  State<_DeleteButton> createState() => _DeleteButtonState();
+}
+
+class _DeleteButtonState extends State<_DeleteButton> {
+  bool _isFocused = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Focus(
+      onFocusChange: (f) => setState(() => _isFocused = f),
+      onKeyEvent: (node, event) {
+        if (event is KeyDownEvent && (
+          event.logicalKey == LogicalKeyboardKey.select ||
+          event.logicalKey == LogicalKeyboardKey.enter ||
+          event.logicalKey == LogicalKeyboardKey.gameButtonA
+        )) {
+          widget.onPressed();
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
+      child: Container(
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: _isFocused ? Colors.redAccent : Colors.transparent,
+            width: 2,
+          ),
+          color: _isFocused ? Colors.redAccent.withOpacity(0.1) : Colors.transparent,
+        ),
+        child: IconButton(
+          icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
+          onPressed: widget.onPressed,
+          tooltip: 'PURGE',
+        ),
+      ),
+    );
+  }
+}

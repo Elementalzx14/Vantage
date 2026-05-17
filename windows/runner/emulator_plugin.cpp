@@ -1,7 +1,26 @@
-﻿#include "emulator_plugin.h"
+#include "emulator_plugin.h"
 
-#include <windows.h>
 #include <iostream>
+#include <fstream>
+#include <chrono>
+
+static void LogMessage(const std::string& msg) {
+    OutputDebugStringA(("[Vantage-Plugin] " + msg + "\n").c_str());
+    
+    char temp_path[MAX_PATH];
+    if (GetTempPathA(MAX_PATH, temp_path)) {
+        std::string log_path = std::string(temp_path) + "\\vantage_emu.log";
+        std::ofstream log_file(log_path, std::ios::app);
+        if (log_file.is_open()) {
+            auto now_clock = std::chrono::system_clock::now();
+            auto now_time = std::chrono::system_clock::to_time_t(now_clock);
+            char timestamp[26];
+            ctime_s(timestamp, sizeof(timestamp), &now_time);
+            timestamp[24] = '\0'; // Remove newline
+            log_file << "[" << timestamp << "] " << msg << std::endl;
+        }
+    }
+}
 
 void EmulatorPlugin::RegisterWithRegistrar(
     flutter::PluginRegistrarWindows *registrar) {
@@ -38,12 +57,17 @@ void EmulatorPlugin::HandleMethodCall(
     if (arguments) {
       auto corePathIt = arguments->find(flutter::EncodableValue("corePath"));
       auto romPathIt = arguments->find(flutter::EncodableValue("romPath"));
+      auto systemPathIt = arguments->find(flutter::EncodableValue("systemPath"));
       
       if (corePathIt != arguments->end() && romPathIt != arguments->end()) {
         std::string core_path = std::get<std::string>(corePathIt->second);
         std::string rom_path = std::get<std::string>(romPathIt->second);
+        LogMessage("Launch requested. Core: " + core_path + ", ROM: " + rom_path);
 
-        
+        if (systemPathIt != arguments->end()) {
+          libretro_core_.SetSystemPath(std::get<std::string>(systemPathIt->second));
+        }
+
         libretro_core_.Unload();
 
         if (!libretro_core_.LoadCore(core_path)) {
@@ -219,10 +243,20 @@ void EmulatorPlugin::InitAudio(double sample_rate) {
     
     HRESULT hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
     
-    if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) return;
+    if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
+        LogMessage("CoInitializeEx failed");
+        return;
+    }
 
-    if (FAILED(XAudio2Create(&xaudio2_, 0, XAUDIO2_DEFAULT_PROCESSOR))) return;
-    if (FAILED(xaudio2_->CreateMasteringVoice(&mastering_voice_))) return;
+    if (FAILED(XAudio2Create(&xaudio2_, 0, XAUDIO2_DEFAULT_PROCESSOR))) {
+        LogMessage("XAudio2Create failed");
+        return;
+    }
+    if (FAILED(xaudio2_->CreateMasteringVoice(&mastering_voice_))) {
+        LogMessage("CreateMasteringVoice failed");
+        return;
+    }
+    LogMessage("Audio initialized successfully");
 
     WAVEFORMATEX wfx = {0};
     wfx.wFormatTag = WAVE_FORMAT_PCM;

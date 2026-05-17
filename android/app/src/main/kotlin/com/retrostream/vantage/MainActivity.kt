@@ -1,4 +1,4 @@
-﻿package com.retrostream.vantage
+package com.retrostream.vantage
 
 import android.content.Context
 import android.os.Build
@@ -35,12 +35,13 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "launch" -> {
-                        val romPath  = call.argument<String>("romPath")  ?: return@setMethodCallHandler result.error("MISSING", "romPath required", null)
-                        val corePath = call.argument<String>("corePath") ?: return@setMethodCallHandler result.error("MISSING", "corePath required", null)
+                        val romPath    = call.argument<String>("romPath")    ?: return@setMethodCallHandler result.error("MISSING", "romPath required", null)
+                        val corePath   = call.argument<String>("corePath")   ?: return@setMethodCallHandler result.error("MISSING", "corePath required", null)
+                        val systemPath = call.argument<String>("systemPath")
                         
-                        
-                        RetroViewFactory.pendingRom  = romPath
-                        RetroViewFactory.pendingCore = corePath
+                        RetroViewFactory.pendingRom        = romPath
+                        RetroViewFactory.pendingCore       = corePath
+                        RetroViewFactory.pendingSystemPath = systemPath
                         result.success(null)
                     }
                     "pause"  -> { retroView?.onPause(); result.success(null) }
@@ -183,19 +184,21 @@ class RetroViewFactory(private val activity: android.app.Activity) :
     PlatformViewFactory(StandardMessageCodec.INSTANCE) {
 
     companion object {
-        var pendingRom:  String? = null
-        var pendingCore: String? = null
+        var pendingRom:        String? = null
+        var pendingCore:       String? = null
+        var pendingSystemPath: String? = null
     }
 
     override fun create(context: Context, viewId: Int, args: Any?): PlatformView {
-        return RetroViewWrapper(activity, pendingRom ?: "", pendingCore ?: "")
+        return RetroViewWrapper(activity, pendingRom ?: "", pendingCore ?: "", pendingSystemPath)
     }
 }
 
 class RetroViewWrapper(
     private val activity: android.app.Activity,
     private val romPath: String,
-    private val corePath: String
+    private val corePath: String,
+    private val systemPath: String?
 ) : PlatformView {
 
     private val internalRetroView: com.swordfish.libretrodroid.GLRetroView by lazy {
@@ -203,7 +206,7 @@ class RetroViewWrapper(
             coreFilePath    = corePath
             gameFilePath    = romPath
             shader          = com.swordfish.libretrodroid.GLRetroView.SHADER_SHARP
-            systemDirectory = java.io.File(activity.filesDir, "system").also { it.mkdirs() }.absolutePath
+            systemDirectory = systemPath ?: java.io.File(activity.filesDir, "system").also { it.mkdirs() }.absolutePath
             savesDirectory  = java.io.File(activity.filesDir, "saves").also { it.mkdirs() }.absolutePath
         }
         val view = com.swordfish.libretrodroid.GLRetroView(activity, data)
