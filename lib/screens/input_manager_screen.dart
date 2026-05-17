@@ -592,18 +592,25 @@ class _BindRow extends StatelessWidget {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                label,
-                style: TextStyle(
-                  fontWeight: FontWeight.w900,
-                  fontSize: 14,
-                  letterSpacing: 2,
-                  color: selected ? Colors.white : Colors.white70,
+              Expanded(
+                child: Text(
+                  label,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w900,
+                    fontSize: 14,
+                    letterSpacing: 2,
+                    color: selected ? Colors.white : Colors.white70,
+                  ),
                 ),
               ),
+              const SizedBox(width: 12),
               Row(
+                mainAxisSize: MainAxisSize.min,
                 children: [
                   Container(
+                    constraints: const BoxConstraints(maxWidth: 150),
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     decoration: BoxDecoration(
                       color: isBinding
@@ -616,15 +623,18 @@ class _BindRow extends StatelessWidget {
                             : (selected ? const Color(0xFFFF5C00) : Colors.transparent),
                       ),
                     ),
-                    child: Text(
-                      isBinding ? "LISTENING..." : currentValue,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w900,
-                        color: isBinding
-                            ? Colors.blue
-                            : (selected ? const Color(0xFFFF5C00) : Colors.white),
-                        letterSpacing: 1,
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        isBinding ? "LISTENING..." : currentValue,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w900,
+                          color: isBinding
+                              ? Colors.blue
+                              : (selected ? const Color(0xFFFF5C00) : Colors.white),
+                          letterSpacing: 1,
+                        ),
                       ),
                     ),
                   ),
