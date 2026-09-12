@@ -1,0 +1,6 @@
+[
+  {"id":"fceumm","url":"https://github.com/libretro/libretro-fceumm.git","commit":"236ccdfc911e84c60fea6b9d0699c2d440a8de14","directory":".","makefile":"Makefile.libretro","license":"Copying"},
+  {"id":"snes9x","url":"https://github.com/libretro/snes9x.git","commit":"890b5d445538fe790aa3add3d5702c80f551e0ae","directory":"libretro","makefile":"Makefile","license":"LICENSE"},
+  {"id":"gambatte","url":"https://github.com/libretro/gambatte-libretro.git","commit":"d9d6cd06382d1ced30de34d56d3609452323dab1","directory":".","makefile":"Makefile.libretro","license":"COPYING"},
+  {"id":"mgba","url":"https://github.com/libretro/mgba.git","commit":"e31759b24e7a4e3899285ff720d7b573ac328ae7","directory":".","license":"LICENSE"}
+]

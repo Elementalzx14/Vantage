@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:gamepads/gamepads.dart';
 import '../services/prefs.dart';
 import '../services/theme_service.dart';
+import '../services/ios_controls.dart';
 
 class InputManagerScreen extends StatefulWidget {
   const InputManagerScreen({super.key});
@@ -26,7 +27,7 @@ class _InputManagerScreenState extends State<InputManagerScreen> with SingleTick
   late final List<GlobalKey> _keyboardKeys;
   late final List<GlobalKey> _gamepadKeys;
 
-  static final Map<String, int> _defaultGamepadMap = Platform.isAndroid ? {
+  static final Map<String, int> _defaultGamepadMap = Platform.isIOS ? iosGamepadMap : Platform.isAndroid ? {
     'button_0': 8,
     'button_1': 0,
     'button_2': 9,

@@ -1,3 +1,5 @@
+const iosBundledCoreIds = {'fceumm', 'snes9x', 'gambatte', 'mgba'};
+
 class CoreEntry {
   final String id;
   final String displayName;
@@ -21,7 +23,7 @@ class CoreEntry {
 
   bool supports(String platform) {
     // iOS needs bundled, signed cores and its own native emulator backend.
-    if (platform == 'ios') return false;
+    if (platform == 'ios') return iosBundledCoreIds.contains(id);
     if (platforms == null) return true;
     return platforms!.contains(platform);
   }

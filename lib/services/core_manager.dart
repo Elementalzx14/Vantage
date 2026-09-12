@@ -28,6 +28,7 @@ class CoreManager {
   late String _coresDir;
   late String _systemDir;
   bool _initialized = false;
+  Map<String, String> _bundledCores = {};
 
   
 
@@ -93,6 +94,10 @@ class CoreManager {
     _systemDir = await pathService.systemDir;
     await Directory(_coresDir).create(recursive: true);
     await Directory(_systemDir).create(recursive: true);
+    if (Platform.isIOS) {
+      _bundledCores = await const MethodChannel('com.retrostream.vantage/emulator')
+          .invokeMapMethod<String, String>('getBundledCores') ?? {};
+    }
     _initialized = true;
   }
 
@@ -105,9 +110,12 @@ class CoreManager {
   String _corePath(CoreEntry entry) =>
       '$_coresDir/${_installedName(entry)}';
 
-  bool isInstalled(CoreEntry entry) => File(_corePath(entry)).existsSync();
+  bool isInstalled(CoreEntry entry) => Platform.isIOS
+      ? _bundledCores.containsKey(entry.id)
+      : File(_corePath(entry)).existsSync();
 
   String? pathForCore(CoreEntry entry) {
+    if (Platform.isIOS) return _bundledCores[entry.id];
     final f = File(_corePath(entry));
     return f.existsSync() ? f.path : null;
   }
@@ -340,6 +348,7 @@ String? corePathForPlatformTag(String tag) {
   
 
   bool deleteCore(CoreEntry entry) {
+    if (Platform.isIOS) return false; // Signed bundle contents are read-only.
     final f = File(_corePath(entry));
     if (f.existsSync()) { f.deleteSync(); return true; }
     return false;

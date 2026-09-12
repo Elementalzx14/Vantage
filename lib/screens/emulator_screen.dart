@@ -27,6 +27,8 @@ import 'dart:async';
 import 'dart:convert';
 import '../services/core_manager.dart';
 import '../widgets/save_state_manager.dart';
+import '../widgets/ios_gamepad.dart';
+import '../services/ios_controls.dart';
 
 
 
@@ -93,7 +95,7 @@ class _EmulatorScreenState extends State<EmulatorScreen>
     ];
   }
   
-  static final Map<String, int> _defaultGamepadMap = Platform.isAndroid ? {
+  static final Map<String, int> _defaultGamepadMap = Platform.isIOS ? iosGamepadMap : Platform.isAndroid ? {
     
     'button_0': 8, 
     'button_1': 0, 
@@ -213,7 +215,7 @@ class _EmulatorScreenState extends State<EmulatorScreen>
       // Handle Quick Menu toggle via Select (6) or Start (7) buttons
       // These are often buttons 6, 7 or similar on gamepads
       if (event.type == KeyType.button && event.value > 0) {
-        if (event.key == '6' || event.key == '7' || event.key == 'buttonSelect' || event.key == 'buttonStart') {
+        if (event.key == '6' || event.key == '7' || event.key == 'buttonSelect' || event.key == 'buttonStart' || (Platform.isIOS && event.key == 'buttonHome')) {
           setState(() {
             if (_showDock) {
               _showDock = false;
@@ -254,6 +256,12 @@ class _EmulatorScreenState extends State<EmulatorScreen>
       String lookupKey = event.key;
       if (event.type == KeyType.analog) {
         lookupKey = '${event.key}${event.value > 0 ? '+' : '-'}';
+        if (Platform.isIOS) {
+          final opposite = _gamepadMap['${event.key}${event.value > 0 ? '-' : '+'}'];
+          if (opposite != null && opposite < 100) {
+            _channel.invokeMethod('keyUp', {'keyCode': opposite});
+          }
+        }
       }
 
       int? retroId = _gamepadMap[lookupKey];
@@ -351,7 +359,7 @@ class _EmulatorScreenState extends State<EmulatorScreen>
       });
       if (mounted) {
         if (result is int) {
-          _textureId = result;
+          setState(() => _textureId = result);
         }
         
         final double? ar = await _channel.invokeMethod<double>('getAspectRatio');
@@ -818,7 +826,12 @@ class _EmulatorScreenState extends State<EmulatorScreen>
             ),
 
             
-            if (isNarrowPortrait)
+            if (Platform.isIOS)
+              Positioned.fill(child: IosGamepad(
+                onDown: (code) => _channel.invokeMethod('keyDown', {'keyCode': code}),
+                onUp: (code) => _channel.invokeMethod('keyUp', {'keyCode': code}),
+              )),
+            if (isNarrowPortrait && !Platform.isIOS)
               Positioned.fill(
                 child: VirtualGamepad(
                   onButtonDown: (btn) => _channel
@@ -1212,7 +1225,7 @@ class _EmulatorSurface extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     Widget child;
-    if (Platform.isWindows) {
+    if (Platform.isWindows || Platform.isIOS) {
       if (textureId != null) {
         child = Texture(
           textureId: textureId!,
@@ -1254,7 +1267,7 @@ class _EmulatorSurface extends StatelessWidget {
 
     
     
-    if (Platform.isAndroid) {
+    if (Platform.isAndroid || (Platform.isIOS && orientation == Orientation.portrait)) {
       return Align(
         alignment: alignment,
         child: AspectRatio(

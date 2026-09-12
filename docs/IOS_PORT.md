@@ -1,83 +1,85 @@
-# Vantage iOS port
+# Vantage iOS emulators
 
-## Current milestone
+This branch adds a native iOS libretro host and builds four emulator cores from
+pinned source revisions. The earlier iOS preview has been confirmed by the tester
+to open and display the game library. Native playback needs physical iPhone testing.
 
-This branch adds an unsigned iOS **library-browsing preview**. It is not yet a
-playable emulator. The intended final scope is the user's entire JellyEmu library;
-console coverage must be assessed against the actual library and iPhone.
+| Console | Bundled core | First test formats |
+| --- | --- | --- |
+| NES | FCEUmm | .nes |
+| SNES | Snes9x | .sfc, .smc |
+| Game Boy / Game Boy Color | Gambatte | .gb, .gbc |
+| Game Boy Advance | mGBA | .gba |
 
-The app has an iOS project, app links (`vantage://launch?itemId=...`), a local-network
-permission description, and local-network HTTP allowance. Use HTTPS for remote
-servers. Server login, Keychain persistence, network access and layouts still need
-verification on a signed physical iPhone build.
+Use uncompressed ROMs for this first emulator build. Other consoles are not yet
+available. Support for all JellyEmu games remains a long-term target, not a claim
+made by this build. BIOS-dependent games and cross-core cloud states need separate
+verification. No games or BIOS files are bundled with the app.
 
-Server addresses and credentials are entered by each user in the installed app.
-They must never be embedded in source, workflows, tests, screenshots or commits.
-Compatibility planning can use console names without publishing a user's library.
+## Install and test
 
-Playback and core management show a clear preview message on iOS. Game launch
-returns before ROM download. iOS no longer identifies as Linux or downloads
-Android/desktop cores. The native Android and Windows projects and their release
-workflow are unchanged.
+1. Download the latest successful `Vantage-iOS-unsigned-<number>` artifact from
+   Actions and extract `Vantage-unsigned.ipa` from the outer ZIP.
+2. Upload the IPA to Signulous. Sign all embedded frameworks with the app and
+   retain the same bundle identifier to preserve the app's existing data.
+3. Open Vantage and visit Cores. All four should show **Included in this app**.
+   License information is available from each core's info button.
+4. Start a game from one of the listed systems. Check video and sound, then hold
+   a direction while pressing A or B. Test both portrait and landscape layouts.
+5. Use the floating game menu to save state, exit the game, reopen it and load.
+   Test the game's own battery save separately, including after closing the app.
+6. Background and reopen the app; check pause/resume and audio. If available,
+   connect a Bluetooth controller and test controls. Home opens the game menu;
+   Menu and Options map to Start and Select.
 
-## Build from Windows
+Server addresses and credentials are entered in the installed app, never embedded
+in source or workflows. Use HTTPS remotely. Local-network HTTP is enabled by the
+iOS project. Keep private server details, tokens and game lists out of public issues.
 
-The development SDK is Flutter **3.38.5**, with Dart 3.10.4. Dependencies remain
-locked to the upstream `pubspec.lock`. The declared older minimum Flutter version
-in upstream `pubspec.yaml` is not sufficient for the locked dependencies.
+## Implementation
 
-1. Work in this repository on `ios-port`.
-2. Use `tool/flutter-local.ps1` for the project-local Flutter SDK on this PC.
-   Example: `./tool/flutter-local.ps1 test --no-pub`.
-3. Commit and push to your fork's `ios-port` branch. The iOS workflow starts on
-   changes to app, iOS, tests, dependencies or build files.
-4. Open the fork's Actions page and select **Build unsigned iOS preview**.
-5. When the run passes, download `Vantage-iOS-unsigned-<run number>` and extract
-   the outer GitHub artifact ZIP. Inside is `Vantage-unsigned.ipa` and its SHA-256.
-6. Upload the **IPA**, not the outer ZIP, to Signulous. Sign it for your registered
-   iPhone and install using Signulous's instructions.
+- `packages/vantage_emulator` registers the existing emulator method channel only
+  on iOS. `CoreHost.hpp` owns the libretro lifecycle, input, software pixel formats,
+  state serialization and battery/RTC files. Calls run on one serial queue.
+- The iOS bridge publishes BGRA Flutter textures, sends PCM through AVAudioEngine,
+  and handles audio interruptions, volume, pause/resume and playback speed.
+- iPhone multitouch controls send standard libretro button IDs. Apple controller
+  key names are mapped separately from Android and Windows defaults.
+- Cores are bundled as frameworks. The app validates core paths against its own
+  bundle and never downloads executable cores. Unsupported consoles are rejected
+  before a ROM is downloaded.
+- iOS ROM downloads use the session token and a partial file, renamed only after
+  completion. SRAM/RTC is written beside the cached ROM on pause, stop and periodically.
+- The native Android/Windows projects and release workflow are unchanged. Existing
+  dependency versions are retained; the only new dependency is the local iOS plugin.
 
-The workflow runs on `macos-15`, executes analysis and tests, then builds release
-device code with `flutter build ios --release --no-codesign`. Packaging checks the
-arm64 executable and Flutter frameworks, creates `Payload/Runner.app`, validates
-the ZIP and uploads the artifact for 14 days. No Apple or Signulous credentials
-are required for this unsigned build. Signing and device installation are separate
-steps; a successful compile does not prove either one works.
+## Reproduce the build
 
-For a manual macOS build:
+Use Flutter **3.38.5** / Dart **3.10.4** and the committed lockfile. From this PC,
+`tool/flutter-local.ps1` uses the project-local SDK without changing system PATH.
+Windows desktop plugin setup requires symlink support; after dependencies resolve,
+local tests can run with `./tool/flutter-local.ps1 test --no-pub`.
+
+The macOS workflow runs:
 
 ```sh
 flutter pub get --enforce-lockfile
 flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings
 flutter test --no-pub
+python3 tool/build_ios_cores.py
+bash tool/test_native_core.sh
 flutter build ios --release --no-codesign --no-pub
 bash tool/package_unsigned_ios.sh
 ```
 
-The Windows SDK is stored in this task's `work/flutter`, and its package cache in
-`work/pub-cache`. The wrapper uses these without changing system PATH. Windows
-desktop plugin setup requires symlink support (usually Windows Developer Mode).
-The iOS build itself runs on GitHub's Mac. Local tests can use `--no-pub` after
-dependency resolution even if Windows plugin symlink creation fails.
+`tool/ios_cores.json` pins source identities. The build provides corresponding core
+source archives, original licenses, and the host source/build scripts in a second
+artifact. Keep these with binary distributions and preserve each core's license.
+The native smoke test builds FCEUmm for the Mac host and uses an original generated
+NES homebrew program to exercise real video, audio callbacks, button input, state
+save/load, battery files, reset and reload. It does not substitute for iPhone testing.
 
-## Remaining emulator work
-
-- Inventory the library's actual console tags and identify the iPhone/iOS version.
-- Implement an iOS native backend for Vantage's emulator method channel, video
-  surface, audio, input, lifecycle pause/resume, SRAM and save states.
-- Build and bundle appropriate arm64 iOS cores with their licenses. The existing
-  Android `.so` and Windows `.dll` binaries cannot run on iOS. Dynamically downloaded
-  desktop cores are not a viable replacement for signed iOS code.
-- Validate touch controls and controllers. Existing on-screen controls contain
-  Android key codes and require an explicit iOS input mapping.
-- Evaluate demanding systems separately, including graphics APIs and JIT needs.
-  Do not claim all games work merely because the IPA installs.
-- Test each supported core using legally supplied games or homebrew, then test
-  server downloads, launch links, save synchronization, rotation and app suspension
-  on the actual signed iPhone build.
-
-## References
-
-- [Flutter iOS builds](https://docs.flutter.dev/deployment/ios)
-- [GitHub artifact downloads](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts)
-- [Signulous custom app signing](https://www.signulous.com/)
+Remaining work includes more cores, archive handling, BIOS management, additional
+input devices, hardware rendering for demanding consoles, save compatibility, and
+physical-device performance and stability. Adding a console requires an iOS-capable
+core and testing; recognizing a JellyEmu platform tag alone does not make it playable.

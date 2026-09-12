@@ -86,7 +86,6 @@ final router = GoRouter(
     GoRoute(
       path: '/emulator',
       builder: (_, state) {
-        if (Platform.isIOS) return const IosPreviewScreen();
         final args = state.extra as Map<String, dynamic>;
         return EmulatorScreen(
           romPath: args['romPath'] as String,

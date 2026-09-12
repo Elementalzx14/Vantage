@@ -773,6 +773,13 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "4.5.3"
+  vantage_emulator:
+    dependency: "direct main"
+    description:
+      path: "packages/vantage_emulator"
+      relative: true
+    source: path
+    version: "0.1.0"
   vector_graphics:
     dependency: transitive
     description:

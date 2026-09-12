@@ -1,0 +1,23 @@
+// Keys emitted by gamepads_ios 0.1.3+3, mapped to standard libretro joypad IDs.
+const iosGamepadMap = <String, int>{
+  'buttonA': 8,
+  'buttonB': 0,
+  'buttonX': 9,
+  'buttonY': 1,
+  'leftShoulder': 10,
+  'rightShoulder': 11,
+  'buttonOptions': 2,
+  'buttonMenu': 3,
+  'leftThumbstickButton': 14,
+  'rightThumbstickButton': 15,
+  'leftTrigger+': 12,
+  'rightTrigger+': 13,
+  'dpad - xAxis-': 6,
+  'dpad - xAxis+': 7,
+  'dpad - yAxis-': 5,
+  'dpad - yAxis+': 4,
+  'leftStick - xAxis-': 6,
+  'leftStick - xAxis+': 7,
+  'leftStick - yAxis-': 5,
+  'leftStick - yAxis+': 4,
+};

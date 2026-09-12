@@ -1,4 +1,4 @@
-name: Build unsigned iOS preview
+name: Build unsigned iOS app
 
 on:
   workflow_dispatch:
@@ -10,7 +10,8 @@ on:
       - 'assets/**'
       - 'test/**'
       - 'pubspec.*'
-      - 'tool/package_unsigned_ios.sh'
+      - 'tool/**'
+      - 'packages/**'
       - '.github/workflows/build-ios.yml'
 
 permissions:
@@ -50,6 +51,12 @@ jobs:
       - name: Run tests
         run: flutter test --no-pub
 
+      - name: Build pinned iOS emulator cores
+        run: python3 tool/build_ios_cores.py
+
+      - name: Test native emulator with original homebrew
+        run: bash tool/test_native_core.sh
+
       - name: Build unsigned iPhone app
         run: flutter build ios --release --no-codesign --no-pub --build-number "$GITHUB_RUN_NUMBER"
 
@@ -66,9 +73,18 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Upload corresponding core and host sources
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vantage-core-sources-${{ github.run_number }}
+          path: build/ios-cores/Sources/
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Explain preview status
         run: |
-          echo '## Vantage iOS preview' >> "$GITHUB_STEP_SUMMARY"
+          echo '## Vantage iOS emulator build' >> "$GITHUB_STEP_SUMMARY"
           echo 'Download and extract the artifact ZIP, then upload Vantage-unsigned.ipa to Signulous for signing.' >> "$GITHUB_STEP_SUMMARY"
-          echo 'This is a library-browsing preview. Native iOS game playback is not implemented yet.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Bundled cores: FCEUmm (NES), Snes9x (SNES), Gambatte (GB/GBC), mGBA (GBA). Physical iPhone testing is required.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Sign all embedded frameworks with the app. Corresponding source archives are provided in the core-sources artifact.' >> "$GITHUB_STEP_SUMMARY"
           echo 'No Apple account, certificate, provisioning profile or Signulous credentials are used by this workflow.' >> "$GITHUB_STEP_SUMMARY"
