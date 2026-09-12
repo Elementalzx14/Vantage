@@ -33,6 +33,7 @@ class CoreManager {
 
   
   static String get currentPlatform {
+    if (Platform.isIOS) return 'ios';
     if (Platform.isAndroid) return 'android';
     if (Platform.isLinux)   return 'linux';
     if (Platform.isWindows) return 'windows';
@@ -50,6 +51,7 @@ class CoreManager {
   
   
   static String get currentArch {
+    if (Platform.isIOS) return 'arm64';
     if (Platform.isAndroid) {
       return _androidAbi;
     }
@@ -208,6 +210,9 @@ String? corePathForPlatformTag(String tag) {
     CoreEntry entry, {
     void Function(int)? onProgress,
   }) async {
+    if (Platform.isIOS) {
+      throw UnsupportedError('iOS cores must be bundled with the app.');
+    }
     await init();
 
     final url = entry.downloadUrl(

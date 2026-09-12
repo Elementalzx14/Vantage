@@ -48,6 +48,12 @@ class LaunchService {
   }
 
   Future<void> launchGame(JfItem item) async {
+    if (Platform.isIOS) {
+      downloadProgress.value = null;
+      statusMessage.value = null;
+      router.push('/ios-preview');
+      return;
+    }
     final serverUrl = await _prefs.serverUrl;
     final token = await _prefs.token;
     final userId = await _prefs.userId;

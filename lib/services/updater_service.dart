@@ -43,6 +43,8 @@ class UpdaterService {
   }
 
   Future<VantageUpdate?> checkForUpdate() async {
+    // Sideloaded iOS updates are rebuilt and signed externally.
+    if (Platform.isIOS) return null;
     try {
       final res = await http.get(
         Uri.parse('https://api.github.com/repos/Jellyfin-PG/Vantage/releases/latest'),

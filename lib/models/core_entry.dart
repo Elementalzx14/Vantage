@@ -20,6 +20,8 @@ class CoreEntry {
   });
 
   bool supports(String platform) {
+    // iOS needs bundled, signed cores and its own native emulator backend.
+    if (platform == 'ios') return false;
     if (platforms == null) return true;
     return platforms!.contains(platform);
   }
@@ -44,6 +46,9 @@ class CoreEntry {
     required String platform,
     String arch = 'x86_64',
   }) {
+    if (platform == 'ios') {
+      throw UnsupportedError('iOS cores must be bundled with the app.');
+    }
     final file = _getFileName(platform);
 
     return switch (platform) {

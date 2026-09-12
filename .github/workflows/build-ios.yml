@@ -1,0 +1,74 @@
+name: Build unsigned iOS preview
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ios-port]
+    paths:
+      - 'ios/**'
+      - 'lib/**'
+      - 'assets/**'
+      - 'test/**'
+      - 'pubspec.*'
+      - 'tool/package_unsigned_ios.sh'
+      - '.github/workflows/build-ios.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-preview-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-ios:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.38.5'
+          channel: stable
+          cache: true
+
+      - name: Show build tool versions
+        run: |
+          flutter --version
+          xcodebuild -version
+          pod --version
+
+      - name: Install locked dependencies
+        run: flutter pub get --enforce-lockfile
+
+      - name: Check Dart errors
+        run: flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings
+
+      - name: Run tests
+        run: flutter test --no-pub
+
+      - name: Build unsigned iPhone app
+        run: flutter build ios --release --no-codesign --no-pub --build-number "$GITHUB_RUN_NUMBER"
+
+      - name: Package and verify unsigned IPA
+        run: bash tool/package_unsigned_ios.sh
+
+      - name: Upload IPA for external signing
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vantage-iOS-unsigned-${{ github.run_number }}
+          path: |
+            build/ios/ipa/Vantage-unsigned.ipa
+            build/ios/ipa/Vantage-unsigned.ipa.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Explain preview status
+        run: |
+          echo '## Vantage iOS preview' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Download and extract the artifact ZIP, then upload Vantage-unsigned.ipa to Signulous for signing.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'This is a library-browsing preview. Native iOS game playback is not implemented yet.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'No Apple account, certificate, provisioning profile or Signulous credentials are used by this workflow.' >> "$GITHUB_STEP_SUMMARY"
