@@ -11,6 +11,10 @@ permission description, and local-network HTTP allowance. Use HTTPS for remote
 servers. Server login, Keychain persistence, network access and layouts still need
 verification on a signed physical iPhone build.
 
+Server addresses and credentials are entered by each user in the installed app.
+They must never be embedded in source, workflows, tests, screenshots or commits.
+Compatibility planning can use console names without publishing a user's library.
+
 Playback and core management show a clear preview message on iOS. Game launch
 returns before ROM download. iOS no longer identifies as Linux or downloads
 Android/desktop cores. The native Android and Windows projects and their release
