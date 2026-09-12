@@ -56,7 +56,10 @@ def main():
             run(['cmake', '-S', src, '-B', build, '-DCMAKE_SYSTEM_NAME=iOS',
                  '-DCMAKE_OSX_ARCHITECTURES=arm64', '-DCMAKE_OSX_SYSROOT=iphoneos',
                  '-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0', '-DCMAKE_BUILD_TYPE=Release',
-                 '-DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY',
+                 # Function probes must link; static archives falsely report missing
+                 # functions (such as popcount32) as available on iOS.
+                 '-DCMAKE_TRY_COMPILE_TARGET_TYPE=EXECUTABLE',
+                 '-DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO',
                  '-DBUILD_LIBRETRO=ON', '-DBUILD_QT=OFF', '-DBUILD_SDL=OFF',
                  '-DBUILD_GL=OFF', '-DBUILD_GLES2=OFF', '-DBUILD_GLES3=OFF',
                  '-DBUILD_SHARED=OFF', '-DBUILD_STATIC=OFF', '-DBUILD_LTO=OFF',
