@@ -9,7 +9,7 @@ test -d "$app/Frameworks/App.framework"
 test -d "$app/Frameworks/Flutter.framework"
 executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Info.plist")
 test -n "$executable"
-xcrun lipo -verify_arch arm64 "$app/$executable"
+xcrun lipo "$app/$executable" -verify_arch arm64
 
 staging=$(mktemp -d "${TMPDIR:-/tmp}/vantage-ipa.XXXXXX")
 trap 'rm -rf "$staging"' EXIT
